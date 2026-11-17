@@ -1,0 +1,23 @@
+# Whitelist approach: ignore everything (all RPG Maker XP bundled files such as
+# RPGXP.exe, DLLs, rtp/, System/, Bonus/, Steam files), then re-allow only our own files.
+/*
+
+# Repository meta
+!/.gitignore
+!/.gitattributes
+!/README.md
+
+# Custom sources (scripts, tools, etc.)
+!/Custom/
+
+# Attributes editor (custom tool; must stay next to RPGXP.exe)
+!/Attributes/
+/Attributes/AttributesEditor.exe
+
+# Build / editor junk anywhere
+*.obj
+*.pdb
+*.tmp
+Thumbs.db
+desktop.ini
+.vs/
