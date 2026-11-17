@@ -9,64 +9,6 @@ namespace XpAttributes
 {
     public enum PanelMode { None, Actors, Enemies, Weapons, Armors, States, Skills, Settings, NoProject }
 
-    /// <summary>Small level graph in the style of the Database parameter curves.</summary>
-    public class GraphBox : Control
-    {
-        public string Title = "";
-        public Color Fill = Color.OrangeRed;
-        public double Base, Growth;
-        public int MinLevel = 1, MaxLevel = 99;
-        public double MaxValue = 100;
-        public Func<double, double> Clamp = v => v;
-        readonly ToolTip tip = new ToolTip();
-        int lastLevel = -1;
-
-        public GraphBox()
-        {
-            DoubleBuffered = true;
-            SetStyle(ControlStyles.ResizeRedraw, true);
-        }
-
-        public double ValueAt(int level) { return Clamp(Base + Growth * (level - 1)); }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            var g = e.Graphics;
-            g.Clear(Color.White);
-            int w = Width - 1, h = Height - 1;
-            int n = Math.Max(MaxLevel - MinLevel, 1);
-            var pts = new List<PointF> { new PointF(0, h) };
-            for (int lv = MinLevel; lv <= MaxLevel; lv++)
-            {
-                float x = (float)(lv - MinLevel) * w / n;
-                double v = Math.Max(0, Math.Min(MaxValue, ValueAt(lv)));
-                pts.Add(new PointF(x, (float)(h - v / MaxValue * h)));
-            }
-            pts.Add(new PointF(w, h));
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (var b = new SolidBrush(Fill)) g.FillPolygon(b, pts.ToArray());
-            g.SmoothingMode = SmoothingMode.None;
-            using (var p = new Pen(Color.FromArgb(160, 160, 160))) g.DrawRectangle(p, 0, 0, w, h);
-            g.DrawString(Title, Font, Brushes.Black, 3, 2);
-            string scale = PanelForm.Pct(MaxValue);
-            var sz = g.MeasureString(scale, Font);
-            g.DrawString(scale, Font, Brushes.Gray, w - sz.Width - 2, 2);
-        }
-
-        protected override void OnMouseMove(MouseEventArgs e)
-        {
-            int n = Math.Max(MaxLevel - MinLevel, 1);
-            int lv = MinLevel + (int)Math.Round((double)e.X / Math.Max(Width - 1, 1) * n);
-            lv = Math.Max(MinLevel, Math.Min(MaxLevel, lv));
-            if (lv != lastLevel)
-            {
-                lastLevel = lv;
-                tip.SetToolTip(this, "Lv " + lv + ": " + PanelForm.Pct(ValueAt(lv)));
-            }
-            base.OnMouseMove(e);
-        }
-    }
-
     /// <summary>Grid preview of a skill's area of effect (center tile marked).</summary>
     public class AreaPreview : Control
     {
@@ -131,9 +73,11 @@ namespace XpAttributes
         readonly Dictionary<PanelMode, Panel> pages = new Dictionary<PanelMode, Panel>();
 
         // Actor page
-        NumericUpDown aRate, aRateGrowth, aDmg, aDmgGrowth;
-        GraphBox gRate, gDmg;
-        Label aRateInfo, aDmgInfo, aDefault;
+        TextBox aName;
+        ComboBox aClass;
+        NumericUpDown aLevel, aMaxLevel, aExp;
+        Label aExpHint, aDefault;
+        readonly List<StatRow> aStats = new List<StatRow>();
         // Enemy page
         NumericUpDown eRate, eDmg;
         Label eDefault;
@@ -258,33 +202,125 @@ namespace XpAttributes
 
         // ------------------------------------------------------------------ pages
 
+        // ------------------------------------------------------------------ actor attributes
+
+        /// <summary>One attribute of the Actors page: a value at level 1 and a value at the max level.</summary>
+        public class StatDef
+        {
+            public string Key, Title, Desc, Hint;
+            public int Min, Max;
+            public int Param;      // Database parameter used for the defaults (-1 = none)
+            public int Default;    // default when there is no Database parameter
+            public StatDef(string key, string title, string desc, int min, int max, int param, int def, string hint)
+            {
+                Key = key; Title = title; Desc = desc; Min = min; Max = max; Param = param; Default = def; Hint = hint;
+            }
+        }
+
+        class StatRow
+        {
+            public StatDef Def;
+            public NumericUpDown Lv1, Max;
+            public Label MaxLabel;
+        }
+
+        class ClassItem
+        {
+            public int Id;
+            public string Text;
+            public override string ToString() { return Text; }
+        }
+
+        // Keys are stored in Data/Attributes.rxdata as "<key>" (level 1) and "<key>_max" (max level).
+        public static readonly StatDef[] ActorStats =
+        {
+            new StatDef("hp", "HP", "health points, 1 – 10000", 1, 10000, 0, 0, "Health points of the character."),
+            new StatDef("sp", "SP", "skill points, 1 – 1000", 1, 1000, 1, 0, "Used for special skills like healing or magic."),
+            new StatDef("str", "Str", "strength, 1 – 100", 1, 100, 2, 0, "Determines how much damage the character deals."),
+            new StatDef("mg", "Mg", "magic, 1 – 100", 1, 100, 5, 0, "Magic damage dealt and healing done."),
+            new StatDef("crit_rate", "Crtr", "crit rate, 0 – 100 %", 0, 100, -1, 5, "Chance to deal additional damage."),
+            new StatDef("crit_damage", "CrtD", "crit damage, 100 % = ×2", 0, 10000, -1, 100, "Base is ×2: damage + 100 % damage."),
+            new StatDef("spd", "Spd", "speed, 1 – 100", 1, 100, 4, 0, "The faster character attacks first."),
+            new StatDef("luck", "Luck", "1 – 100", 1, 100, 3, 0, "Enemy attacks miss more often, own attacks hit more often."),
+            new StatDef("def", "Def", "defense, 1 – 100", 1, 100, -1, 4, "Damage taken = enemy Str + weapon ATK − Def."),
+            new StatDef("res", "Res", "resistance, 1 – 100", 1, 100, -1, 2, "Damage taken = enemy Mg + weapon ATK − Res."),
+            new StatDef("move", "Move", "squares, 1 – 25", 1, 25, -1, 5, "Squares the character can move on the board."),
+        };
+
+        public const int MaxActorLevel = 100;
+        public const int DefaultExpPerLevel = 100;
+
+        /// <summary>A whole-number field with its label above it.</summary>
+        NumericUpDown Field(Control parent, string label, int x, int y, int width, int min, int max, EventHandler changed, out Label caption)
+        {
+            caption = new Label { Text = label, Location = new Point(x, y), Size = new Size(width, 16), ForeColor = Color.FromArgb(85, 85, 85) };
+            parent.Controls.Add(caption);
+            var n = new NumericUpDown
+            {
+                Location = new Point(x, y + 17),
+                Width = width,
+                Minimum = min,
+                Maximum = max,
+                DecimalPlaces = 0,
+                Increment = 1,
+                TextAlign = HorizontalAlignment.Right
+            };
+            n.ValueChanged += changed;
+            parent.Controls.Add(n);
+            return n;
+        }
+
         void BuildActorPage()
         {
-            var p = NewPage(PanelMode.Actors, 450);
-            EventHandler ch = (s, e) => OnEntryEdited();
+            const int gw = 284;
+            int y = 0;
+            Label cap;
+            var p = NewPage(PanelMode.Actors, 100);
 
-            var g1 = new GroupBox { Text = "Crit Rate  (chance, 0 – 100 %)", Location = new Point(8, 0), Size = new Size(284, 184) };
-            aRate = Row(g1, "At level 1", 22, 0, 100, 1, "%", 90, ch);
-            aRateGrowth = Row(g1, "Per level", 50, -100, 100, 2, "% / level", 90, ch);
-            gRate = new GraphBox { Title = "Crit Rate", Fill = Color.FromArgb(232, 96, 60), Location = new Point(10, 80), Size = new Size(264, 76), MaxValue = 100 };
-            gRate.Clamp = v => Math.Max(0, Math.Min(100, v));
-            g1.Controls.Add(gRate);
-            aRateInfo = new Label { Location = new Point(10, 160), Size = new Size(264, 18), ForeColor = Color.DimGray };
-            g1.Controls.Add(aRateInfo);
+            // Character
+            var gc = new GroupBox { Text = "Character", Location = new Point(8, y), Size = new Size(gw, 136) };
+            gc.Controls.Add(new Label { Text = "Name", Location = new Point(10, 20), Size = new Size(260, 16), ForeColor = Color.FromArgb(85, 85, 85) });
+            aName = new TextBox { Location = new Point(10, 37), Width = 264 };
+            aName.TextChanged += (s, e) => OnActorEdited(s);
+            gc.Controls.Add(aName);
+            gc.Controls.Add(new Label { Text = "Class", Location = new Point(10, 64), Size = new Size(260, 16), ForeColor = Color.FromArgb(85, 85, 85) });
+            aClass = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(10, 81), Width = 264 };
+            aClass.SelectedIndexChanged += (s, e) => OnActorEdited(s);
+            gc.Controls.Add(aClass);
+            gc.Controls.Add(new Label { Text = "Lists every class from the Classes tab.", Location = new Point(10, 110), Size = new Size(264, 18), ForeColor = Color.DimGray });
+            p.Controls.Add(gc);
+            y += gc.Height + 8;
 
-            var g2 = new GroupBox { Text = "Crit Damage  (+% damage, 100 % = ×2)", Location = new Point(8, 192), Size = new Size(284, 184) };
-            aDmg = Row(g2, "At level 1", 22, 0, 10000, 1, "%", 90, ch);
-            aDmgGrowth = Row(g2, "Per level", 50, -1000, 1000, 2, "% / level", 90, ch);
-            gDmg = new GraphBox { Title = "Crit Damage", Fill = Color.FromArgb(214, 160, 32), Location = new Point(10, 80), Size = new Size(264, 76) };
-            gDmg.Clamp = v => ClampDamage(v);
-            g2.Controls.Add(gDmg);
-            aDmgInfo = new Label { Location = new Point(10, 160), Size = new Size(264, 18), ForeColor = Color.DimGray };
-            g2.Controls.Add(aDmgInfo);
+            // Level
+            EventHandler ch = (s, e) => OnActorEdited(s);
+            var gl = new GroupBox { Text = "LV  (level, max. " + MaxActorLevel + ")", Location = new Point(8, y), Size = new Size(gw, 86) };
+            aLevel = Field(gl, "Level", 10, 20, 82, 1, MaxActorLevel, ch, out cap);
+            aMaxLevel = Field(gl, "Max level", 101, 20, 82, 1, MaxActorLevel, ch, out cap);
+            aExp = Field(gl, "EXP / level-up", 192, 20, 82, 1, 100000, ch, out cap);
+            aExpHint = new Label { Location = new Point(10, 62), Size = new Size(264, 18), ForeColor = Color.DimGray };
+            gl.Controls.Add(aExpHint);
+            p.Controls.Add(gl);
+            y += gl.Height + 8;
 
-            aDefault = Help(p, "", 382, 34);
-            var reset = new Button { Text = "Reset to defaults", Location = new Point(8, 418), Size = new Size(130, 25) };
-            reset.Click += (s, e) => ResetCrit();
-            p.Controls.AddRange(new Control[] { g1, g2, reset });
+            // Attributes
+            foreach (var d in ActorStats)
+            {
+                var g = new GroupBox { Text = d.Title + "  (" + d.Desc + ")", Location = new Point(8, y), Size = new Size(gw, 98) };
+                var row = new StatRow { Def = d };
+                row.Lv1 = Field(g, "Level 1", 10, 20, 127, d.Min, d.Max, ch, out cap);
+                row.Max = Field(g, "Max level", 147, 20, 127, d.Min, d.Max, ch, out row.MaxLabel);
+                g.Controls.Add(new Label { Text = d.Hint, Location = new Point(10, 62), Size = new Size(264, 32), ForeColor = Color.DimGray });
+                p.Controls.Add(g);
+                aStats.Add(row);
+                y += g.Height + 8;
+            }
+
+            // Footer
+            var reset = new Button { Text = "Reset to defaults", Location = new Point(8, y + 2), Size = new Size(130, 25) };
+            reset.Click += (s, e) => ResetActor();
+            aDefault = new Label { Location = new Point(146, y + 2), Size = new Size(146, 34), ForeColor = Color.DimGray };
+            p.Controls.AddRange(new Control[] { reset, aDefault });
+            p.Height = y + 40;
         }
 
         void BuildEnemyPage()
@@ -542,21 +578,8 @@ namespace XpAttributes
                 switch (mode)
                 {
                     case PanelMode.Actors:
-                        {
-                            bool def = !c.Has(sec, entryId, "crit_rate");
-                            var d = c.ActorDefault;
-                            SetNum(aRate, c.D(sec, entryId, "crit_rate", d[0]));
-                            SetNum(aRateGrowth, c.D(sec, entryId, "crit_rate_growth", d[1]));
-                            SetNum(aDmg, c.D(sec, entryId, "crit_damage", d[2]));
-                            SetNum(aDmgGrowth, c.D(sec, entryId, "crit_damage_growth", d[3]));
-                            var e = p.Find("actors", entryId);
-                            int max = e != null ? Math.Max(e.FinalLevel, 2) : 99;
-                            gRate.MaxLevel = max;
-                            gDmg.MaxLevel = max;
-                            ShowDefaultHint(aDefault, def);
-                            UpdateActorGraphs();
-                            break;
-                        }
+                        LoadActor(p);
+                        break;
                     case PanelMode.Enemies:
                         {
                             bool def = !c.Has(sec, entryId, "crit_rate");
@@ -614,17 +637,150 @@ namespace XpAttributes
             l.Text = isDefault ? "Not edited yet – uses the defaults from the System tab." : "Edited.";
         }
 
-        void UpdateActorGraphs()
+        static int Clamp(double v, int min, int max)
         {
-            gRate.Base = V(aRate); gRate.Growth = V(aRateGrowth);
-            gDmg.Base = V(aDmg); gDmg.Growth = V(aDmgGrowth);
-            double top = Math.Max(gDmg.ValueAt(1), gDmg.ValueAt(gDmg.MaxLevel));
-            gDmg.MaxValue = Math.Max(200, Math.Ceiling(top / 100.0) * 100);
-            gRate.Invalidate();
-            gDmg.Invalidate();
-            int max = gRate.MaxLevel;
-            aRateInfo.Text = "Lv 1: " + Pct(gRate.ValueAt(1)) + "     Lv " + max + ": " + Pct(gRate.ValueAt(max));
-            aDmgInfo.Text = "Lv 1: +" + Pct(gDmg.ValueAt(1)) + "     Lv " + max + ": +" + Pct(gDmg.ValueAt(max));
+            return (int)Math.Max(min, Math.Min(max, Math.Round(v)));
+        }
+
+        /// <summary>
+        /// Starting values of an actor that wasn't edited yet: name, class and levels from the Database,
+        /// HP / SP / Str / Mg / Spd / Luck from the Database curves (MaxHP, MaxSP, STR, INT, AGI, DEX) at level 1
+        /// and at the final level, crit values from the System tab defaults, the rest fixed.
+        /// </summary>
+        public static Dictionary<string, int> ActorDefaults(AttrConfig c, DbEntry e)
+        {
+            var d = new Dictionary<string, int>();
+            int level = e != null ? e.InitialLevel : 1;
+            int maxLevel = Clamp(e != null ? e.FinalLevel : 99, 1, MaxActorLevel);
+            d["class_id"] = e != null ? e.ClassId : 1;
+            d["max_level"] = maxLevel;
+            d["level"] = Clamp(level, 1, maxLevel);
+            d["exp_per_level"] = DefaultExpPerLevel;
+            var cd = c.ActorDefault;   // crit rate Lv1, rate/level, damage Lv1, damage/level
+            foreach (var s in ActorStats)
+            {
+                double lv1 = s.Default, top = s.Default;
+                if (s.Param >= 0 && e != null && e.Param(s.Param, 1) >= 0)
+                {
+                    lv1 = e.Param(s.Param, 1);
+                    top = e.Param(s.Param, maxLevel);
+                }
+                else if (s.Key == "crit_rate") { lv1 = cd[0]; top = cd[0] + cd[1] * (maxLevel - 1); }
+                else if (s.Key == "crit_damage") { lv1 = cd[2]; top = cd[2] + cd[3] * (maxLevel - 1); }
+                int a = Clamp(lv1, s.Min, s.Max);
+                d[s.Key] = a;
+                d[s.Key + "_max"] = Math.Max(a, Clamp(top, s.Min, s.Max));
+            }
+            return d;
+        }
+
+        void LoadActor(Project p)
+        {
+            var c = p.Config;
+            const string sec = "actors";
+            var e = p.Find(sec, entryId);
+            var d = ActorDefaults(c, e);
+            bool edited = c.Has(sec, entryId, "hp");
+
+            // Values set with the old Crit panel (rate/damage + growth per level) are taken over.
+            if (!edited && c.Has(sec, entryId, "crit_rate"))
+            {
+                int ml = d["max_level"];
+                double r = c.D(sec, entryId, "crit_rate", 0), rg = c.D(sec, entryId, "crit_rate_growth", 0);
+                double m = c.D(sec, entryId, "crit_damage", 100), mg = c.D(sec, entryId, "crit_damage_growth", 0);
+                d["crit_rate"] = Clamp(r, 0, 100);
+                d["crit_rate_max"] = Math.Max(d["crit_rate"], Clamp(r + rg * (ml - 1), 0, 100));
+                d["crit_damage"] = Clamp(m, 0, 10000);
+                d["crit_damage_max"] = Math.Max(d["crit_damage"], Clamp(m + mg * (ml - 1), 0, 10000));
+            }
+
+            aName.Text = c.S(sec, entryId, "name", e != null ? e.Name : "");
+            int classId = (int)c.D(sec, entryId, "class_id", d["class_id"]);
+            aClass.Items.Clear();
+            int index = -1;
+            foreach (var k in p.List("classes"))
+            {
+                if (k.Id == classId) index = aClass.Items.Count;
+                aClass.Items.Add(new ClassItem { Id = k.Id, Text = k.Id.ToString("000") + ": " + k.Name });
+            }
+            if (index < 0)
+            {
+                index = aClass.Items.Count;
+                aClass.Items.Add(new ClassItem { Id = classId, Text = classId.ToString("000") + ": (not in the Classes tab)" });
+            }
+            aClass.SelectedIndex = index;
+
+            SetNum(aMaxLevel, c.D(sec, entryId, "max_level", d["max_level"]));
+            SetNum(aLevel, Math.Min(c.D(sec, entryId, "level", d["level"]), (double)aMaxLevel.Value));
+            SetNum(aExp, c.D(sec, entryId, "exp_per_level", d["exp_per_level"]));
+            foreach (var r in aStats)
+            {
+                SetNum(r.Max, c.D(sec, entryId, r.Def.Key + "_max", d[r.Def.Key + "_max"]));
+                SetNum(r.Lv1, Math.Min(c.D(sec, entryId, r.Def.Key, d[r.Def.Key]), (double)r.Max.Value));
+            }
+            aDefault.Text = edited ? "Edited." : "Not edited yet – uses the Database values.";
+            UpdateActorLabels();
+        }
+
+        void UpdateActorLabels()
+        {
+            aExpHint.Text = "Every level-up needs " + aExp.Value + " EXP.";
+            string max = "Max level (Lv " + aMaxLevel.Value + ")";
+            foreach (var r in aStats) r.MaxLabel.Text = max;
+        }
+
+        /// <summary>Keeps Level ≤ Max level and Level 1 value ≤ max level value: the field that was changed wins.</summary>
+        void KeepOrder(object sender)
+        {
+            if (sender == aLevel && aLevel.Value > aMaxLevel.Value) aMaxLevel.Value = aLevel.Value;
+            if (sender == aMaxLevel && aLevel.Value > aMaxLevel.Value) aLevel.Value = aMaxLevel.Value;
+            foreach (var r in aStats)
+            {
+                if (r.Lv1.Value <= r.Max.Value) continue;
+                if (sender == r.Max) r.Lv1.Value = r.Max.Value;
+                else r.Max.Value = r.Lv1.Value;
+            }
+        }
+
+        void OnActorEdited(object sender)
+        {
+            if (loading) return;
+            var p = ctl.Project;
+            if (p == null || mode != PanelMode.Actors) return;
+            loading = true;
+            try { KeepOrder(sender); }
+            finally { loading = false; }
+
+            var c = p.Config;
+            const string sec = "actors";
+            var e = p.Find(sec, entryId);
+            // Name and class are only stored when they differ from the Database.
+            if (e != null && aName.Text == e.Name) c.Remove(sec, entryId, "name");
+            else c.Set(sec, entryId, "name", aName.Text);
+            var ci = aClass.SelectedItem as ClassItem;
+            if (ci == null || (e != null && ci.Id == e.ClassId)) c.Remove(sec, entryId, "class_id");
+            else c.Set(sec, entryId, "class_id", ci.Id);
+            c.Set(sec, entryId, "level", V(aLevel));
+            c.Set(sec, entryId, "max_level", V(aMaxLevel));
+            c.Set(sec, entryId, "exp_per_level", V(aExp));
+            foreach (var r in aStats)
+            {
+                c.Set(sec, entryId, r.Def.Key, V(r.Lv1));
+                c.Set(sec, entryId, r.Def.Key + "_max", V(r.Max));
+            }
+            c.Remove(sec, entryId, "crit_rate_growth", "crit_damage_growth");
+            aDefault.Text = "Edited.";
+            UpdateActorLabels();
+            ctl.ScheduleSave();
+        }
+
+        void ResetActor()
+        {
+            var p = ctl.Project;
+            if (p == null) return;
+            p.Config.Clear("actors", entryId);
+            LoadValues();
+            ctl.ScheduleSave();
         }
 
         void UpdateSkillControls()
@@ -667,14 +823,6 @@ namespace XpAttributes
             var c = p.Config;
             switch (mode)
             {
-                case PanelMode.Actors:
-                    c.Set(sec, entryId, "crit_rate", V(aRate));
-                    c.Set(sec, entryId, "crit_rate_growth", V(aRateGrowth));
-                    c.Set(sec, entryId, "crit_damage", V(aDmg));
-                    c.Set(sec, entryId, "crit_damage_growth", V(aDmgGrowth));
-                    UpdateActorGraphs();
-                    ShowDefaultHint(aDefault, false);
-                    break;
                 case PanelMode.Enemies:
                     c.Set(sec, entryId, "crit_rate", V(eRate));
                     c.Set(sec, entryId, "crit_damage", V(eDmg));

@@ -13,6 +13,19 @@ namespace XpAttributes
         public int InitialLevel = 1;
         public int FinalLevel = 99;
         public int Scope;
+        public int ClassId = 1;
+        // Actors: Database parameter curves (Table 6 x 100: MaxHP, MaxSP, STR, DEX, AGI, INT per level).
+        public int ParamX;
+        public short[] Params;
+
+        /// <summary>Database parameter (0 MaxHP, 1 MaxSP, 2 STR, 3 DEX, 4 AGI, 5 INT) at a level, or -1 if unknown.</summary>
+        public int Param(int kind, int level)
+        {
+            if (Params == null || ParamX <= 0) return -1;
+            level = Math.Max(1, Math.Min(level, 99));
+            int i = kind + level * ParamX;
+            return i >= 0 && i < Params.Length ? Params[i] : -1;
+        }
     }
 
     /// <summary>
@@ -36,6 +49,7 @@ namespace XpAttributes
             { "skills",  new[] { "can_crit", "crit_rate", "crit_damage" } },
         };
         static readonly HashSet<string> BoolKeys = new HashSet<string> { "can_crit", "range_custom", "aoe", "friendly_fire" };
+        static readonly HashSet<string> StringKeys = new HashSet<string> { "name" };
 
         public readonly Dictionary<string, Dictionary<int, Dictionary<string, object>>> Data =
             new Dictionary<string, Dictionary<int, Dictionary<string, object>>>();
@@ -77,12 +91,23 @@ namespace XpAttributes
             return Convert.ToDouble(v) != 0;
         }
 
+        public string S(string section, int id, string key, string def)
+        {
+            Dictionary<string, object> e;
+            object v;
+            if (!Data[section].TryGetValue(id, out e) || !e.TryGetValue(key, out v) || v == null) return def;
+            return v.ToString();
+        }
+
         public void Set(string section, int id, string key, object value)
         {
             Dictionary<string, object> e;
             if (!Data[section].TryGetValue(id, out e)) Data[section][id] = e = new Dictionary<string, object>();
-            e[key] = value is bool ? value : (object)Convert.ToDouble(value);
+            e[key] = value is bool || value is string ? value : (object)Convert.ToDouble(value);
         }
+
+        /// <summary>Removes every value of one entry.</summary>
+        public void Clear(string section, int id) { Data[section].Remove(id); }
 
         public void Remove(string section, int id, params string[] keys)
         {
@@ -113,6 +138,7 @@ namespace XpAttributes
         static object Value(string key, object o)
         {
             if (BoolKeys.Contains(key)) return o is bool ? (bool)o : Num(o) != 0;
+            if (StringKeys.Contains(key)) return o.ToString();
             return Num(o);
         }
 
@@ -220,7 +246,8 @@ namespace XpAttributes
         static readonly Dictionary<string, string> Files = new Dictionary<string, string>
         {
             { "actors", "Actors.rxdata" }, { "enemies", "Enemies.rxdata" }, { "weapons", "Weapons.rxdata" },
-            { "armors", "Armors.rxdata" }, { "states", "States.rxdata" }, { "skills", "Skills.rxdata" }
+            { "armors", "Armors.rxdata" }, { "states", "States.rxdata" }, { "skills", "Skills.rxdata" },
+            { "classes", "Classes.rxdata" }
         };
 
         public Project(string dir)
@@ -269,6 +296,16 @@ namespace XpAttributes
                         e.InitialLevel = Int(o["@initial_level"], 1);
                         e.FinalLevel = Int(o["@final_level"], 99);
                         e.Scope = Int(o["@scope"], 0);
+                        e.ClassId = Int(o["@class_id"], 1);
+                        var t = o["@parameters"] as RUserData;
+                        if (t != null && t.Data != null && t.Data.Length >= 20)
+                        {
+                            int xs = BitConverter.ToInt32(t.Data, 4);
+                            int n = Math.Min(BitConverter.ToInt32(t.Data, 16), (t.Data.Length - 20) / 2);
+                            e.ParamX = xs;
+                            e.Params = new short[n];
+                            for (int k = 0; k < n; k++) e.Params[k] = BitConverter.ToInt16(t.Data, 20 + 2 * k);
+                        }
                         list.Add(e);
                     }
                     lists[f.Key] = list;

@@ -1,13 +1,24 @@
 #==============================================================================
-# ** Attributes  v2.0
+# ** Attributes  v2.1
 #------------------------------------------------------------------------------
 #  Extra database attributes, edited with AttributesEditor.exe (the panel that
 #  opens next to the Database window) and stored in Data/Attributes.rxdata.
 #  There is nothing to edit in this script.
 #
+#  Actors edited in the panel (Actors page) use the panel's values instead of
+#  the Database:
+#    Name, Class, start Level, Max level (up to 100), EXP per level-up
+#    HP -> MaxHP   SP -> MaxSP   Str -> STR   Mg -> INT   Spd -> AGI
+#    Luck -> DEX   Def -> added to PDEF   Res -> added to MDEF
+#    Crtr / CrtD -> Crit Rate / Crit Damage   Move -> FE Tactics move points
+#  Each attribute has a level 1 value and a max level value. The values for
+#  the levels in between come with the level-up system; until then every level
+#  below the max level uses the level 1 value (Attributes.actor_value).
+#  Actors not edited in the panel keep the Database values.
+#
 #  Crit Rate   : chance (0 - 100 %) that an attack / skill is a critical hit
 #  Crit Damage : extra damage of a critical hit in % (100 = double damage)
-#    Actors  : value at level 1 + growth per level
+#    Actors  : panel value (or: value at level 1 + growth per level)
 #              + weapon / armor bonuses + state bonuses
 #    Enemies : fixed value + state bonuses
 #    Skills  : can crit only if enabled for the skill; may add extra rate/damage
@@ -105,6 +116,43 @@ module Attributes
     return d unless set?("actors", id, "crit_rate")
     return [get("actors", id, "crit_rate", d[0]), get("actors", id, "crit_rate_growth", d[1]),
             get("actors", id, "crit_damage", d[2]), get("actors", id, "crit_damage_growth", d[3])]
+  end
+  #--------------------------------------------------------------------------
+  # * Actor attributes from the Actors page
+  #--------------------------------------------------------------------------
+  MAX_LEVEL = 100
+  def self.actor_edited?(id)
+    return set?("actors", id, "hp")
+  end
+  #--------------------------------------------------------------------------
+  # * [start level, max level, EXP per level-up], nil if not edited
+  #--------------------------------------------------------------------------
+  def self.actor_level(id)
+    return nil unless actor_edited?(id)
+    max = [[get("actors", id, "max_level", 99).to_i, 1].max, MAX_LEVEL].min
+    lv  = [[get("actors", id, "level", 1).to_i, 1].max, max].min
+    exp = [get("actors", id, "exp_per_level", 100).to_i, 1].max
+    return [lv, max, exp]
+  end
+  #--------------------------------------------------------------------------
+  # * [value at level 1, value at max level], nil if not edited
+  #   key: "hp", "sp", "str", "mg", "crit_rate", "crit_damage", "spd",
+  #        "luck", "def", "res", "move"
+  #--------------------------------------------------------------------------
+  def self.actor_stat(id, key)
+    return nil unless actor_edited?(id)
+    v = get("actors", id, key, 0).to_i
+    return [v, [get("actors", id, key + "_max", v).to_i, v].max]
+  end
+  #--------------------------------------------------------------------------
+  # * Value of an attribute at a level, nil if not edited.
+  #   The level-up system will fill in the levels between; for now:
+  #   level 1 value below the max level, max level value at the max level.
+  #--------------------------------------------------------------------------
+  def self.actor_value(id, key, level)
+    s = actor_stat(id, key)
+    return nil if s == nil
+    return level >= actor_level(id)[1] ? s[1] : s[0]
   end
   #--------------------------------------------------------------------------
   # * [rate, damage]
@@ -327,10 +375,117 @@ end
 #==============================================================================
 
 class Game_Actor < Game_Battler
+  unless method_defined?(:attributes_setup)
+    alias attributes_setup         setup
+    alias attributes_make_exp_list make_exp_list
+    alias attributes_set_level     level=
+    alias attributes_base_maxhp    base_maxhp
+    alias attributes_base_maxsp    base_maxsp
+    alias attributes_base_str      base_str
+    alias attributes_base_dex      base_dex
+    alias attributes_base_agi      base_agi
+    alias attributes_base_int      base_int
+    alias attributes_base_pdef     base_pdef
+    alias attributes_base_mdef     base_mdef
+  end
+  #--------------------------------------------------------------------------
+  # * Panel value of an attribute at the current level (nil = not edited)
+  #--------------------------------------------------------------------------
+  def attr_value(key)
+    return Attributes.actor_value(@actor_id, key, @level)
+  end
+  #--------------------------------------------------------------------------
+  # * Move points for FE Tactics (nil = not edited)
+  #--------------------------------------------------------------------------
+  def attr_move
+    return attr_value("move")
+  end
+  #--------------------------------------------------------------------------
+  # * Setup: name, class and start level from the panel
+  #--------------------------------------------------------------------------
+  def setup(actor_id)
+    attributes_setup(actor_id)
+    lv = Attributes.actor_level(actor_id)
+    return if lv == nil
+    name = Attributes.get("actors", actor_id, "name")
+    @name = name if name.is_a?(String)
+    class_id = Attributes.get("actors", actor_id, "class_id")
+    @class_id = class_id.to_i if class_id != nil and $data_classes[class_id.to_i] != nil
+    @level = lv[0]
+    make_exp_list
+    @exp = @exp_list[@level]
+    @skills = []
+    for i in 1..@level
+      for j in $data_classes[@class_id].learnings
+        learn_skill(j.skill_id) if j.level == i
+      end
+    end
+    @hp = maxhp
+    @sp = maxsp
+  end
+  #--------------------------------------------------------------------------
+  # * EXP list: the same EXP for every level-up, up to the max level
+  #--------------------------------------------------------------------------
+  def make_exp_list
+    attributes_make_exp_list
+    lv = Attributes.actor_level(@actor_id)
+    return if lv == nil
+    @exp_list[1] = 0
+    for i in 2..(Attributes::MAX_LEVEL + 1)
+      @exp_list[i] = i <= lv[1] ? (i - 1) * lv[2] : 0
+    end
+  end
+  #--------------------------------------------------------------------------
+  def level=(level)
+    lv = Attributes.actor_level(@actor_id)
+    return attributes_set_level(level) if lv == nil
+    level = [[level, lv[1]].min, 1].max
+    self.exp = @exp_list[level]
+  end
+  #--------------------------------------------------------------------------
+  def base_maxhp
+    v = attr_value("hp")
+    return v != nil ? v : attributes_base_maxhp
+  end
+  #--------------------------------------------------------------------------
+  def base_maxsp
+    v = attr_value("sp")
+    return v != nil ? v : attributes_base_maxsp
+  end
+  #--------------------------------------------------------------------------
+  def base_str
+    v = attr_value("str")
+    return v != nil ? v : attributes_base_str
+  end
+  #--------------------------------------------------------------------------
+  def base_int
+    v = attr_value("mg")
+    return v != nil ? v : attributes_base_int
+  end
+  #--------------------------------------------------------------------------
+  def base_agi
+    v = attr_value("spd")
+    return v != nil ? v : attributes_base_agi
+  end
+  #--------------------------------------------------------------------------
+  def base_dex
+    v = attr_value("luck")
+    return v != nil ? v : attributes_base_dex
+  end
+  #--------------------------------------------------------------------------
+  def base_pdef
+    return attributes_base_pdef + (attr_value("def") || 0)
+  end
+  #--------------------------------------------------------------------------
+  def base_mdef
+    return attributes_base_mdef + (attr_value("res") || 0)
+  end
   #--------------------------------------------------------------------------
   def base_crit_rate
     v = Attributes.actor_crit(@actor_id)
     n = v[0] + v[1] * (@level - 1)
+    p = attr_value("crit_rate")
+    n = p if p != nil
     n += Attributes.crit_bonus("weapons", @weapon_id)[0]
     for id in [@armor1_id, @armor2_id, @armor3_id, @armor4_id]
       n += Attributes.crit_bonus("armors", id)[0]
@@ -341,6 +496,8 @@ class Game_Actor < Game_Battler
   def base_crit_damage
     v = Attributes.actor_crit(@actor_id)
     n = v[2] + v[3] * (@level - 1)
+    p = attr_value("crit_damage")
+    n = p if p != nil
     n += Attributes.crit_bonus("weapons", @weapon_id)[1]
     for id in [@armor1_id, @armor2_id, @armor3_id, @armor4_id]
       n += Attributes.crit_bonus("armors", id)[1]
@@ -382,5 +539,31 @@ class Window_Status < Window_Base
     self.contents.font.color = normal_color
     self.contents.draw_text(404, 106, 80, 32, Attributes.format(@actor.crit_rate), 2)
     self.contents.draw_text(404, 130, 80, 32, Attributes.format(@actor.crit_damage, true), 2)
+  end
+end
+
+#==============================================================================
+# ** Game_Character  (FE Tactics move points)
+#------------------------------------------------------------------------------
+#  FE Tactics is placed below this script, so its Game_FEUnit#move_points is
+#  wrapped the moment it is defined: actors edited in the panel use their Move
+#  value, everyone else keeps the FE Tactics settings.
+#==============================================================================
+
+class Game_Character
+  def self.method_added(name)
+    super
+    return unless name == :move_points and self.name == "Game_FEUnit"
+    return if @attributes_patching
+    @attributes_patching = true
+    alias_method :attributes_move_points, :move_points
+    define_method(:move_points) do
+      m = nil
+      if actor? and battler.respond_to?(:attr_move)
+        m = battler.attr_move
+      end
+      m != nil ? m : attributes_move_points
+    end
+    @attributes_patching = false
   end
 end

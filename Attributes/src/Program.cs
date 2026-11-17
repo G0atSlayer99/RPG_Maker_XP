@@ -494,7 +494,7 @@ namespace XpAttributes
                     f.ShowEntry(m, m == PanelMode.Skills ? 7 : 1, "001: " + (p.Find("actors", 1) != null ? p.Find("actors", 1).Name : "?"), true);
                     f.SetScriptState(ScriptInstaller.Check(p));
                     f.SetFooter("Project: " + p.Name + "  ·  saved");
-                    f.Size = new Size(f.Width, 640);
+                    f.Size = new Size(f.Width, m == PanelMode.Actors ? 1640 : 640);
                     f.StartPosition = FormStartPosition.Manual;
                     f.Location = new Point(-3000, -3000);
                     f.Show();
@@ -504,6 +504,39 @@ namespace XpAttributes
                         f.DrawToBitmap(bmp, new Rectangle(0, 0, f.Width, f.Height));
                         bmp.Save(Path.Combine(outDir, "panel_" + m + ".png"));
                     }
+                }
+
+                // Actors page: edit through the controls, then check what was stored.
+                {
+                    var f = ctl.Panel;
+                    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                    Func<string, object> get = n => typeof(PanelForm).GetField(n, flags).GetValue(f);
+                    f.ShowEntry(PanelMode.Actors, 2, "002", true);
+                    log.AppendLine("actor2 unedited: " + ((Label)get("aDefault")).Text);
+                    var rows = (System.Collections.IList)get("aStats");
+                    var hp = rows[0];
+                    var lv1 = (NumericUpDown)hp.GetType().GetField("Lv1").GetValue(hp);
+                    var max = (NumericUpDown)hp.GetType().GetField("Max").GetValue(hp);
+                    log.AppendLine("actor2 hp defaults lv1=" + lv1.Value + " max=" + max.Value);
+                    lv1.Value = Math.Min(lv1.Maximum, max.Value + 50);
+                    log.AppendLine("lv1 above max -> lv1=" + lv1.Value + " max=" + max.Value);
+                    max.Value = 20;
+                    log.AppendLine("max lowered to 20 -> lv1=" + lv1.Value + " max=" + max.Value);
+                    var level = (NumericUpDown)get("aLevel");
+                    var maxLevel = (NumericUpDown)get("aMaxLevel");
+                    maxLevel.Value = 100; level.Value = 100; maxLevel.Value = 50;
+                    log.AppendLine("level=" + level.Value + " max level=" + maxLevel.Value);
+                    ((TextBox)get("aName")).Text = "Renamed";
+                    var cls = (ComboBox)get("aClass");
+                    log.AppendLine("classes: " + cls.Items.Count + " selected=" + cls.SelectedItem);
+                    cls.SelectedIndex = cls.Items.Count - 1;
+                    p.SaveConfig();
+                    var c2 = AttrConfig.Load(p.DataDir);
+                    var sb = new StringBuilder("stored actor2:");
+                    foreach (var kv in c2.Data["actors"][2]) sb.Append(" " + kv.Key + "=" + kv.Value);
+                    log.AppendLine(sb.ToString());
+                    ((Button)((Panel)get("content")).Controls.OfType<Panel>().First(x => x.Visible).Controls.OfType<Button>().First()).PerformClick();
+                    log.AppendLine("after reset: has actor2=" + p.Config.Data["actors"].ContainsKey(2) + " status=" + ((Label)get("aDefault")).Text + " hp lv1=" + lv1.Value + " name=" + ((TextBox)get("aName")).Text);
                 }
             }
             catch (Exception ex) { log.AppendLine("ERROR " + ex); }
