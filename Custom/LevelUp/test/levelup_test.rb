@@ -245,6 +245,11 @@ begin
   $schedule = proc { |f| [] }
   s = LevelUp::Screen.new(a, entries[0])
   shots = {}
+  s0 = LevelUp::Screen.new(a, entries[0])
+  12.times { s0.update }
+  check("start: every row equally faded (" + s0.instance_variable_get(:@rows).collect { |x| x.opacity }.inspect + ")",
+    s0.instance_variable_get(:@rows).all? { |x| x.opacity == 128 })
+  s0.dispose
   shots_at = [[:intro, LevelUp::FADE_IN + 2, "1_start"], [:level, 9, "2_level"],
               [:stat, LevelUp::VALUE_AT + 3, "3_stat"], [:skip, 30, "4_skip_white"],
               [:skip, 60, "5_skip_red"]]
@@ -262,6 +267,9 @@ begin
     break if shots.size == shots_at.size or $frame > 4000
   end
   check("Skip stays open without a key", !s.done?)
+  rows = s.instance_variable_get(:@rows)
+  check("after: rising rows dark, others faded (" + rows.collect { |x| x.opacity }.inspect + ")",
+    (0...8).all? { |i| rows[i].opacity == (s.gains[i] > 0 ? 255 : 128) })
   s.dispose
 
   #=== 3 window at the top when the player stands low on the screen ===========

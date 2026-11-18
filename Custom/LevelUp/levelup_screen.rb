@@ -5,7 +5,8 @@
 #    darkened map, the actor's walk sprite on a highlighted tile, a
 #    "Level Up!" sign above it and a parchment window with face, name, class,
 #    "Lv a -> b" and the 8 stats. Rising stats count up one after another
-#    (+1 green, +2 blue); stats without a gain stay faded and are skipped.
+#    (+1 green, +2 blue). All stats start faded; a rising stat turns dark on
+#    its turn, stats without a gain stay faded and are skipped.
 #    Then "Skip" appears; C or A closes the screen.
 #  Several levels from one EXP change -> one screen per level.
 #  Several actors -> one after another (queue). Afterwards the game continues.
@@ -447,7 +448,7 @@ module LevelUp
         f.opacity = 0
         @flash.push(f)
         rb = new_bitmap(COL_W, ROW_H)
-        @rows.push(new_sprite(rb, pos[0], pos[1], 12, @gains[i] > 0 ? 255 : 128))
+        @rows.push(new_sprite(rb, pos[0], pos[1], 12, 128))   # all faded: no spoilers
         draw_row(i, @old[i])
         g = gain_sprite(@gains[i])
         if g != nil
@@ -650,6 +651,7 @@ module LevelUp
       end
       if t == VALUE_AT
         draw_row(i, @new[i])
+        @rows[i].opacity = 255             # darkens only on its turn
         @gain_sprites[i].visible = true
         LevelUp.play(@gains[i] >= 2 ? SE_PLUS2 : SE_PLUS1)
         LevelUp.log("stat " + LABELS[i] + " " + @old[i].to_s + "->" + @new[i].to_s + " +" + @gains[i].to_s)
