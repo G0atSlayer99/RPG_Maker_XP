@@ -1,5 +1,5 @@
 #==============================================================================
-# ** Attributes  v2.1
+# ** Attributes  v2.2
 #------------------------------------------------------------------------------
 #  Extra database attributes, edited with AttributesEditor.exe (the panel that
 #  opens next to the Database window) and stored in Data/Attributes.rxdata.
@@ -11,10 +11,16 @@
 #    HP -> MaxHP   SP -> MaxSP   Str -> STR   Mg -> INT   Spd -> AGI
 #    Luck -> DEX   Def -> added to PDEF   Res -> added to MDEF
 #    Crtr / CrtD -> Crit Rate / Crit Damage   Move -> FE Tactics move points
-#  Each attribute has a level 1 value and a max level value. The values for
-#  the levels in between come with the level-up system; until then every level
-#  below the max level uses the level 1 value (Attributes.actor_value).
-#  Actors not edited in the panel keep the Database values.
+#  Each attribute has a level 1 value and a max level value.
+#  HP, SP, Str, Mg, Spd, Luck, Def and Res grow with the class growth
+#  ("Klassen-Wachstum" window, Classes tab): on every level-up one roll per
+#  stat, r = rand(100): r < p2 -> +2, r < p2 + p1 -> +1, otherwise +0, with the
+#  chances of the actor's current class. Value = level 1 value + all gains,
+#  capped by the actor's max level value and by HP 10000, SP 1000, others 100
+#  (RPG Maker XP itself still limits MaxHP / MaxSP to 9999). The gains are
+#  kept in the actor (and save file); level-downs keep them.
+#  Crtr, CrtD and Move stay at their level 1 value.
+#  Actors not edited in the panel keep the Database values and curves.
 #
 #  Crit Rate   : chance (0 - 100 %) that an attack / skill is a critical hit
 #  Crit Damage : extra damage of a critical hit in % (100 = double damage)
@@ -31,6 +37,8 @@
 #    $game_actors[1].crit_damage_plus += 25    # permanent +25 % crit damage
 #    $game_actors[1].crit_rate                 # current crit rate
 #    $game_actors[1].crit_damage               # current crit damage
+#    $game_actors[1].attr_growth               # gains so far, e.g. {"str"=>4}
+#    $game_actors[1].last_growth               # gains of the last level-up
 #
 #  Place this script below the default scripts and above "Main".
 #  It replaces Game_Battler#attack_effect and #skill_effect.
@@ -152,7 +160,38 @@ module Attributes
   def self.actor_value(id, key, level)
     s = actor_stat(id, key)
     return nil if s == nil
-    return level >= actor_level(id)[1] ? s[1] : s[0]
+    return s[0]
+  end
+  #--------------------------------------------------------------------------
+  # * Class growth (Klassen-Wachstum)
+  #--------------------------------------------------------------------------
+  GROWTH_KEYS = ["hp", "sp", "str", "mg", "spd", "luck", "def", "res"]
+  GROWTH_DEFAULT = {
+    "hp" => [60, 30], "sp" => [50, 10], "str" => [45, 10], "mg" => [20, 0],
+    "spd" => [40, 5], "luck" => [30, 5], "def" => [40, 10], "res" => [20, 0]
+  }
+  GROWTH_CAP = {
+    "hp" => 10000, "sp" => 1000, "str" => 100, "mg" => 100,
+    "spd" => 100, "luck" => 100, "def" => 100, "res" => 100
+  }
+  #--------------------------------------------------------------------------
+  # * [+1 chance, +2 chance] in % of a class for a stat
+  #--------------------------------------------------------------------------
+  def self.class_growth(class_id, key)
+    d = GROWTH_DEFAULT[key] || [0, 0]
+    p2 = [[get("classes", class_id, key + "_p2", d[1]).to_i, 0].max, 100].min
+    p1 = [[get("classes", class_id, key + "_p1", d[0]).to_i, 0].max, 100 - p2].min
+    return [p1, p2]
+  end
+  #--------------------------------------------------------------------------
+  # * One level-up roll: 0, 1 or 2
+  #--------------------------------------------------------------------------
+  def self.roll_growth(class_id, key)
+    g = class_growth(class_id, key)
+    r = rand(100)
+    return 2 if r < g[1]
+    return 1 if r < g[1] + g[0]
+    return 0
   end
   #--------------------------------------------------------------------------
   # * [rate, damage]
@@ -379,6 +418,7 @@ class Game_Actor < Game_Battler
     alias attributes_setup         setup
     alias attributes_make_exp_list make_exp_list
     alias attributes_set_level     level=
+    alias attributes_set_exp       exp=
     alias attributes_base_maxhp    base_maxhp
     alias attributes_base_maxsp    base_maxsp
     alias attributes_base_str      base_str
@@ -392,7 +432,56 @@ class Game_Actor < Game_Battler
   # * Panel value of an attribute at the current level (nil = not edited)
   #--------------------------------------------------------------------------
   def attr_value(key)
-    return Attributes.actor_value(@actor_id, key, @level)
+    v = Attributes.actor_value(@actor_id, key, @level)
+    return nil if v == nil
+    return v unless Attributes::GROWTH_KEYS.include?(key)
+    return [v + attr_growth[key].to_i, growth_cap(key)].min
+  end
+  #--------------------------------------------------------------------------
+  # * Gains from class growth so far / of the last level-up
+  #--------------------------------------------------------------------------
+  def attr_growth
+    @attr_growth = {} if @attr_growth == nil
+    return @attr_growth
+  end
+  #--------------------------------------------------------------------------
+  def last_growth
+    @last_growth = {} if @last_growth == nil
+    return @last_growth
+  end
+  #--------------------------------------------------------------------------
+  # * Highest value of a stat: the actor's max level value and the global cap
+  #--------------------------------------------------------------------------
+  def growth_cap(key)
+    s = Attributes.actor_stat(@actor_id, key)
+    cap = Attributes::GROWTH_CAP[key] || 100
+    cap = [cap, s[1]].min if s != nil
+    return cap
+  end
+  #--------------------------------------------------------------------------
+  # * Rolls the class growth for a number of level-ups
+  #--------------------------------------------------------------------------
+  def roll_growth(levels)
+    return if levels < 1 or !Attributes.actor_edited?(@actor_id)
+    @last_growth = {}
+    levels.times do
+      for key in Attributes::GROWTH_KEYS
+        base = Attributes.actor_value(@actor_id, key, @level)
+        have = base + attr_growth[key].to_i
+        gain = [Attributes.roll_growth(@class_id, key), growth_cap(key) - have].min
+        next if gain <= 0
+        attr_growth[key] = attr_growth[key].to_i + gain
+        @last_growth[key] = @last_growth[key].to_i + gain
+      end
+    end
+  end
+  #--------------------------------------------------------------------------
+  # * EXP change: roll the growth for every level gained
+  #--------------------------------------------------------------------------
+  def exp=(exp)
+    old = @level
+    attributes_set_exp(exp)
+    roll_growth(@level - old) if old != nil and @level > old
   end
   #--------------------------------------------------------------------------
   # * Move points for FE Tactics (nil = not edited)
@@ -414,6 +503,8 @@ class Game_Actor < Game_Battler
     @level = lv[0]
     make_exp_list
     @exp = @exp_list[@level]
+    @attr_growth = {}
+    roll_growth(@level - 1)   # recruits above level 1 get their earlier level-ups
     @skills = []
     for i in 1..@level
       for j in $data_classes[@class_id].learnings

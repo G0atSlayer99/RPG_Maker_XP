@@ -18,6 +18,8 @@ namespace XpAttributes
         public bool Quitting;
         public static bool TestMode;   // --selftest: no tray icon, no launching, nothing remembered
         readonly PanelForm panel;
+        readonly ClassGrowthForm growth;
+        int lastDbClass = -1;
         readonly NotifyIcon tray;
         readonly System.Windows.Forms.Timer tick, saveTimer;
         IntPtr db = IntPtr.Zero;
@@ -42,6 +44,8 @@ namespace XpAttributes
             panel = new PanelForm(this);
             panel.Icon = MakeIcon();
             var unused = panel.Handle;
+            growth = new ClassGrowthForm(this) { Icon = panel.Icon };
+            unused = growth.Handle;
 
             var menu = new ContextMenuStrip();
             menu.Items.Add(new ToolStripMenuItem("Attributes for RPG Maker XP") { Enabled = false });
@@ -248,6 +252,8 @@ namespace XpAttributes
 
         // ------------------------------------------------------------------ following the Database window
 
+        const int ClassesTab = 1;
+
         static PanelMode ModeForTab(int tab)
         {
             // Actors, Classes, Skills, Items, Weapons, Armors, Enemies, Troops, States, Animations, Tilesets, Common Events, System
@@ -300,7 +306,20 @@ namespace XpAttributes
             if (h != db) DatabaseOpened(h, pid);
             standalone = false;
 
-            PanelMode mode = ModeForTab(Win32.GetTabIndex(h));
+            int tab = Win32.GetTabIndex(h);
+            if (tab == ClassesTab && Project != null && !hiddenByUser)
+            {
+                HidePanel();
+                IntPtr clist = Win32.GetVisibleEntryList(h);
+                int csel = Win32.GetSelection(clist);
+                int cid = csel >= 0 ? csel + 1 : -1;
+                if (!growth.Visible || cid != lastDbClass) growth.ShowClasses(cid != lastDbClass ? cid : -1);
+                lastDbClass = cid;
+                DockGrowth(h);
+                return;
+            }
+            HideGrowth();
+            PanelMode mode = ModeForTab(tab);
             if (mode == PanelMode.None || hiddenByUser)
             {
                 HidePanel();
@@ -354,6 +373,38 @@ namespace XpAttributes
             panel.Flush();
             SaveNow();
             HidePanel();
+            HideGrowth();
+        }
+
+        void HideGrowth()
+        {
+            if (growth.Visible && growth.Docked)
+            {
+                growth.DiscardInvalid();
+                growth.Hide();
+                lastDbClass = -1;
+            }
+        }
+
+        /// <summary>Puts the Klassen-Wachstum window to the right of the Database window.</summary>
+        void DockGrowth(IntPtr h)
+        {
+            Rectangle f = Win32.GetFrame(h);
+            var screen = Screen.FromRectangle(f).WorkingArea;
+            int width = growth.Width;
+            int x = f.Right - 1;
+            if (x + width > screen.Right) x = Math.Max(screen.Left, f.Left - width + 1);
+            int y = Math.Max(screen.Top, Math.Min(f.Top, screen.Bottom - growth.Height));
+            var target = new Rectangle(x, y, width, growth.Height);
+            if (growth.Bounds != target) growth.Bounds = target;
+            IntPtr fg = Win32.GetForegroundWindow();
+            bool active = fg == h || fg == growth.Handle || (fg != IntPtr.Zero && Win32.ProcessOf(fg) == dbPid) || Form.ActiveForm == growth;
+            if (growth.TopMost != active) growth.TopMost = active;
+            if (!growth.Visible)
+            {
+                growth.Docked = true;
+                growth.Show();
+            }
         }
 
         void HidePanel()
@@ -416,6 +467,7 @@ namespace XpAttributes
             tray.Visible = false;
             tray.Dispose();
             panel.Close();
+            growth.Close();
             ExitThread();
         }
     }
@@ -537,6 +589,47 @@ namespace XpAttributes
                     log.AppendLine(sb.ToString());
                     ((Button)((Panel)get("content")).Controls.OfType<Panel>().First(x => x.Visible).Controls.OfType<Button>().First()).PerformClick();
                     log.AppendLine("after reset: has actor2=" + p.Config.Data["actors"].ContainsKey(2) + " status=" + ((Label)get("aDefault")).Text + " hp lv1=" + lv1.Value + " name=" + ((TextBox)get("aName")).Text);
+                }
+
+                // Klassen-Wachstum window
+                {
+                    var g = (ClassGrowthForm)typeof(Controller).GetField("growth", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(ctl);
+                    g.StartPosition = FormStartPosition.Manual;
+                    g.Location = new Point(-3000, -3000);
+                    g.Show();
+                    g.ShowClasses(1);
+                    Application.DoEvents();
+                    Action<string> shot = name =>
+                    {
+                        Application.DoEvents();
+                        using (var bmp = new Bitmap(g.Width, g.Height))
+                        {
+                            g.DrawToBitmap(bmp, new Rectangle(0, 0, g.Width, g.Height));
+                            bmp.Save(Path.Combine(outDir, name));
+                        }
+                    };
+                    shot("growth_default.png");
+                    log.AppendLine("growth class1 defaults: KP avg=" + g.TestAvg(0) + " Str avg=" + g.TestAvg(2) + " stored=" + p.Config.Data["classes"].ContainsKey(1));
+                    g.TestSet(2, 1, "70"); g.TestSet(2, 2, "20");
+                    log.AppendLine("Str 70/20: avg=" + g.TestAvg(2) + " error=" + g.TestError(2) + " saved p1=" + p.Config.D("classes", 1, "str_p1", -1) + " p2=" + p.Config.D("classes", 1, "str_p2", -1));
+                    g.TestSet(2, 2, "40");
+                    log.AppendLine("Str 70/40: avg=" + g.TestAvg(2) + " error=" + g.TestError(2) + " saved p2 still=" + p.Config.D("classes", 1, "str_p2", -1));
+                    shot("growth_error.png");
+                    g.TestSet(2, 2, "250");
+                    log.AppendLine("Str p2 '250' -> avg=" + g.TestAvg(2) + " (clamped 100, error)=" + g.TestError(2));
+                    g.TestSet(2, 1, ""); g.TestSet(2, 2, "");
+                    log.AppendLine("Str empty -> avg=" + g.TestAvg(2) + " saved p1=" + p.Config.D("classes", 1, "str_p1", -1) + " p2=" + p.Config.D("classes", 1, "str_p2", -1));
+                    g.ShowClasses(8);
+                    log.AppendLine("class8 Str avg=" + g.TestAvg(2) + " (defaults)");
+                    g.TestSet(0, 1, "100"); g.TestSet(0, 2, "0");
+                    shot("growth_class8.png");
+                    p.SaveConfig();
+                    var c3 = AttrConfig.Load(p.DataDir);
+                    log.AppendLine("reloaded: class1 str " + c3.D("classes", 1, "str_p1", -1) + "/" + c3.D("classes", 1, "str_p2", -1) + "  class8 hp " + c3.D("classes", 8, "hp_p1", -1) + "/" + c3.D("classes", 8, "hp_p2", -1));
+                    var reset = g.Controls.OfType<Panel>().SelectMany(x => x.Controls.OfType<Button>()).First();
+                    reset.PerformClick();
+                    log.AppendLine("after Zurücksetzen class8: stored=" + p.Config.Data["classes"].ContainsKey(8) + " KP avg=" + g.TestAvg(0));
+                    p.SaveConfig();
                 }
             }
             catch (Exception ex) { log.AppendLine("ERROR " + ex); }

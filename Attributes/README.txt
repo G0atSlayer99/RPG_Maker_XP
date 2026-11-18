@@ -38,8 +38,21 @@ values; "Reset to defaults" removes them again.
   Level, Max level (1 - 100), EXP / level-up (every level-up needs the same EXP)
 
 Level 1 value <= max level value, Level <= Max level: the field you change wins.
-Levels in between: until the level-up system exists, every level below the max
-level uses the level 1 value and the max level uses the max level value.
+
+Klassen-Wachstum (Classes tab)
+------------------------------
+With the Classes tab open, a 720x540 window "Klassen-Wachstum" docks to the right
+of the Database. Per class and stat (KP, SP, Str, Mg, Spd, Luck, Def, Res):
+  +1 Chance  p1 (0 - 100 %)   +2 Chance  p2 (0 - 100 %)   p1 + p2 <= 100
+On every level-up the game rolls once per stat, r = rand(100):
+  r < p2 -> +2,  r < p2 + p1 -> +1,  otherwise +0   (chances of the current class)
+Stat = level 1 value + all gains, capped by the actor's max level value and by
+HP 10000 / SP 1000 / others 100 (RPG Maker XP still shows at most 9999 HP/SP).
+Rows over 100 % turn red and are not saved. "Zurücksetzen" = defaults:
+KP 60/30, SP 50/10, Str 45/10, Mg 20/0, Spd 40/5, Luck 30/5, Def 40/10, Res 20/0.
+Only actors edited on the Actors page grow this way; Crtr, CrtD and Move stay at
+their level 1 value. Actors starting above level 1 get their earlier level-ups
+rolled at the start. Gains are kept in the save file and on level-downs.
 
 
 1. Start the editor together with RPG Maker XP (once)
@@ -81,6 +94,8 @@ Script calls (Event > Script...):
   $game_actors[1].crit_damage_plus += 25   permanent +25 % crit damage
   Attributes.get("skills", 7, "range_max") any value set in the panel (nil if not set)
   Attributes.actor_stat(1, "hp")           [level 1 value, max level value] (nil if not edited)
+  $game_actors[1].attr_growth              gains so far, e.g. {"str"=>4}
+  $game_actors[1].last_growth              gains of the last level-up
 
 
 Files

@@ -37,7 +37,8 @@ namespace XpAttributes
     {
         public const string FileName = "Attributes.rxdata";
         public const string OldFileName = "CritConfig.rxdata";
-        public static readonly string[] Sections = { "actors", "enemies", "weapons", "armors", "states", "skills" };
+        // "classes": level-up growth per class, { id => { "hp_p1" => 60.0, "hp_p2" => 30.0, ... } } (see ClassGrowthForm)
+        public static readonly string[] Sections = { "actors", "enemies", "weapons", "armors", "states", "skills", "classes" };
 
         static readonly Dictionary<string, string[]> OldKeys = new Dictionary<string, string[]>
         {
@@ -169,7 +170,7 @@ namespace XpAttributes
                         foreach (var kv in eh.Pairs)
                             if (kv.Key != null && kv.Value != null) entry[kv.Key.ToString()] = Value(kv.Key.ToString(), kv.Value);
                     }
-                    else if (arr != null)   // v1 format
+                    else if (arr != null && OldKeys.ContainsKey(s))   // v1 format
                     {
                         string[] keys = OldKeys[s];
                         for (int i = 0; i < keys.Length && i < arr.Count; i++) entry[keys[i]] = Value(keys[i], arr[i]);
