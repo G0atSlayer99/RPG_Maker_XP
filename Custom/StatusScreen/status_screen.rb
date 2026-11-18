@@ -151,6 +151,38 @@ module StatusBook
     return sprintf("%.2f", v).sub(/0+$/, "").sub(".", ",")
   end
   #--------------------------------------------------------------------------
+  # * Round face cut from the battler (FACE_RECTS), as a new bitmap of
+  #   size 2 * radius with a soft circular edge; nil without a battler.
+  #   The caller disposes it. Also used by the "Level Up" script.
+  #--------------------------------------------------------------------------
+  def self.round_face(actor, radius)
+    return nil if actor.battler_name == nil or actor.battler_name == ""
+    src = RPG::Cache.battler(actor.battler_name, actor.battler_hue)
+    rect = FACE_RECTS[actor.battler_name]
+    if rect == nil
+      size = ([src.width, src.height].min * 0.42).round
+      rect = [(src.width - size) / 2, 0, size]
+    end
+    size = [[rect[2], 8].max, [src.width, src.height].min].min
+    fx = [[rect[0], 0].max, src.width - size].min
+    fy = [[rect[1], 0].max, src.height - size].min
+    d = radius * 2
+    face = Bitmap.new(d, d)
+    face.stretch_blt(Rect.new(0, 0, d, d), src, Rect.new(fx, fy, size, size))
+    r = radius - 0.5
+    for y in 0...d
+      for x in 0...d
+        dist = Math.sqrt((x + 0.5 - radius) ** 2 + (y + 0.5 - radius) ** 2)
+        next if dist <= r - 1
+        c = face.get_pixel(x, y)
+        a = [[r - dist + 0.5, 0].max, 1].min
+        c.alpha = c.alpha * a
+        face.set_pixel(x, y, c)
+      end
+    end
+    return face
+  end
+  #--------------------------------------------------------------------------
   # * Upper case including German umlauts (Ruby 1.8 only knows ASCII)
   #--------------------------------------------------------------------------
   def self.upcase(text)
@@ -323,30 +355,8 @@ module StatusBook
     PORTRAIT_Y = 90
     PORTRAIT_R = 52
     def draw_portrait(actor)
-      return if actor.battler_name == nil or actor.battler_name == ""
-      src = RPG::Cache.battler(actor.battler_name, actor.battler_hue)
-      rect = StatusBook::FACE_RECTS[actor.battler_name]
-      if rect == nil
-        size = ([src.width, src.height].min * 0.42).round
-        rect = [(src.width - size) / 2, 0, size]
-      end
-      size = [[rect[2], 8].max, [src.width, src.height].min].min
-      fx = [[rect[0], 0].max, src.width - size].min
-      fy = [[rect[1], 0].max, src.height - size].min
-      d = PORTRAIT_R * 2
-      face = Bitmap.new(d, d)
-      face.stretch_blt(Rect.new(0, 0, d, d), src, Rect.new(fx, fy, size, size))
-      r = PORTRAIT_R - 0.5
-      for y in 0...d
-        for x in 0...d
-          dist = Math.sqrt((x + 0.5 - PORTRAIT_R) ** 2 + (y + 0.5 - PORTRAIT_R) ** 2)
-          next if dist <= r - 1
-          c = face.get_pixel(x, y)
-          a = [[r - dist + 0.5, 0].max, 1].min
-          c.alpha = c.alpha * a
-          face.set_pixel(x, y, c)
-        end
-      end
+      face = StatusBook.round_face(actor, PORTRAIT_R)
+      return if face == nil
       @b.blt(PORTRAIT_X - PORTRAIT_R, PORTRAIT_Y - PORTRAIT_R, face, face.rect)
       face.dispose
     end
