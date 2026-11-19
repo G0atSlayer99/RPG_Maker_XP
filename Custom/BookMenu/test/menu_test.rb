@@ -236,6 +236,68 @@ begin
   g = $game_party.menu_groups
   check("removed actor leaves a free spot in Gruppe I", g[0].size == 2 && g.flatten.sort == $game_party.actors.collect { |a| a.id }.sort)
   log("groups after remove: " + g.inspect)
+  #=== 7 no limit: 40 party members (placeholder actors, test copy only) ====
+  base = $data_actors[2]
+  n = $data_actors.size
+  while $data_actors.size <= 45
+    c = Marshal.load(Marshal.dump(base))
+    c.id = $data_actors.size
+    c.name = "Platzh. " + c.id.to_s
+    $data_actors.push(c)
+  end
+  log("database actors in this test: " + ($data_actors.size - 1).to_s)
+  for i in 1...$data_actors.size
+    $game_party.add_actor(i)
+  end
+  check("every actor joined (" + $game_party.actors.size.to_s + ")", $game_party.actors.size == $data_actors.size - 1)
+  g = $game_party.menu_groups
+  check("groups of 3, only the last one may be short (" + g.collect { |x| x.size }.join(",") + ")",
+    g[0...-1].all? { |x| x.size == 3 } && g.flatten.size == $game_party.actors.size)
+  check("roman numerals", [1, 4, 9, 12, 14, 19, 39, 40, 49, 99, 1994].collect { |x| BookMenu.roman(x) } ==
+    ["I", "IV", "IX", "XII", "XIV", "XIX", "XXXIX", "XL", "XLIX", "XCIX", "MCMXCIV"])
+  s = Scene_Menu.new
+  s.create
+  $scene = s
+  log("rows: " + s.rows.size.to_s + " (" + g.size.to_s + " groups + " + (s.rows.size - g.size).to_s + " empty)")
+  check("one empty group after the last group", s.rows.size == g.size + 1)
+  key(s, Input::RIGHT)
+  4.times { key(s, Input::DOWN) }
+  check("4 rows down: scrolled by one per step (top " + s.top.to_s + ", row " + s.row.to_s + ")", s.row == 4 && s.top == 2)
+  composite(s, "out_7_groups_V.rgb")
+  t0 = Time.now
+  steps = 0
+  while s.row < s.rows.size - 1
+    $press = [Input::DOWN]; s.update; $press = []
+    steps += 1
+    weiter = s.last_visible < s.rows.size - 1
+    if !weiter and s.row < s.rows.size - 1
+      log("FAIL weitere Gruppen missing at row " + s.row.to_s)
+    end
+  end
+  ms = ((Time.now - t0) * 1000 / steps).round
+  log("scroll step (redraw only): about " + ms.to_s + " ms (" + steps.to_s + " steps)")
+  check("reached the last row " + s.row.to_s + ", nothing more below", s.last_visible == s.rows.size - 1)
+  composite(s, "out_8_end.rgb")
+  while s.row > 0
+    $press = [Input::UP]; s.update; $press = []
+  end
+  check("back at the top", s.top == 0)
+  s.dispose
+  # long numerals
+  s = Scene_Menu.new
+  s.create
+  s.instance_variable_set(:@focus, :groups)
+  s.move_to(s.rows.size - 1, 0) rescue nil
+  s.dispose
+
+  check("scroll redraw under one frame (25 ms): " + ms.to_s + " ms", ms <= 25)
+
+  #=== 8 save preview shows only the main character ===========================
+  File.open("Save4.rxdata", "wb") { |f| Scene_Save.new.write_save_data(f) }
+  w = Window_SaveFile.new(3, "Save4.rxdata")
+  ch = w.instance_variable_get(:@characters)
+  check("save file still has all characters, preview shows 1 (" + ch.size.to_s + ")", ch.size == 1)
+  w.dispose
 rescue Exception => e
   log("ERROR " + e.class.to_s + ": " + e.message + "\n" + e.backtrace.join("\n"))
 end

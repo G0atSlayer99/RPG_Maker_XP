@@ -11,7 +11,8 @@
 #  Groups are kept in Game_Party (saved with the game) and follow the party:
 #  new party members take the first free character spot, removed ones leave.
 #  A new group starts only when the previous one has 3 characters.
-#  The party limit of 4 is raised to MAX_PARTY (Game_Party#add_actor).
+#  The party limit of 4 is removed (MAX_PARTY, Game_Party#add_actor).
+#  The save slot preview shows only the main character (first party member).
 #  Battles are not changed.
 #
 #  Controls: Up/Down in the menu, C confirm, B close. Right (or "Status")
@@ -29,7 +30,7 @@ module BookMenu
   #--------------------------------------------------------------------------
   # * Settings
   #--------------------------------------------------------------------------
-  MAX_PARTY   = 12     # highest party size (default RPG Maker XP: 4)
+  MAX_PARTY   = nil    # highest party size, nil = no limit (RMXP default: 4)
   GROUP_SIZE  = 3      # characters per group (plus one Begleiter slot)
   MIN_ROWS    = 4      # empty groups are added until this many rows exist
   ENTRIES     = ["Inventar", "Einheiten", "Begleiter", "Status", "Options",
@@ -211,6 +212,12 @@ module BookMenu
       x += p.small_caps(x, base, word, big, small, false, color) + space
     end
   end
+  # font for a seal numeral: 15 px, smaller for long numerals so they fit
+  # inside the ring (28 px)
+  def self.seal_font(p, text)
+    p.font(text.size > 3 ? 13 : 15, true, false, PARCH)
+    p.fit(text, 28, 8)
+  end
   # 1 -> "I", 4 -> "IV" ...
   def self.roman(n)
     s = ""
@@ -235,11 +242,12 @@ end
 #==============================================================================
 class Game_Party
   #--------------------------------------------------------------------------
-  # * Add Actor (limit BookMenu::MAX_PARTY instead of 4)
+  # * Add Actor (no limit, or BookMenu::MAX_PARTY if set)
   #--------------------------------------------------------------------------
   def add_actor(actor_id)
     actor = $game_actors[actor_id]
-    if @actors.size < BookMenu::MAX_PARTY and not @actors.include?(actor)
+    full = (BookMenu::MAX_PARTY != nil and @actors.size >= BookMenu::MAX_PARTY)
+    if actor != nil and !full and !@actors.include?(actor)
       @actors.push(actor)
       $game_player.refresh
     end
@@ -378,6 +386,9 @@ class Scene_Menu
   def dispose
     close_placeholder
     @cursor.bitmap.dispose if @cursor.bitmap != nil
+    if @row_cache != nil
+      @row_cache.values.each { |b| b.dispose }
+    end
     for s in @sprites + @row_sprites
       s.dispose
     end
@@ -548,49 +559,132 @@ class Scene_Menu
     last = last_visible
     for i in @top..last
       y = row_y(i)
-      r = @rows[i]
-      if r["type"] == :group
-        draw_group_row(b, r, y)
-      else
-        draw_empty_row(b, r, y)
-      end
-      b.fill_rect(LIST_X, y + row_h(i) - 1, LIST_R - LIST_X, 1, LINE2)
+      rb = row_bitmap(i)
+      b.blt(LIST_X, y, rb, Rect.new(LIST_X, 0, LIST_R - LIST_X, rb.height))
+      add_row_walkers(@rows[i], y) if @rows[i]["type"] == :group
     end
-    if last < @rows.size - 1
+    blt_center(b, "more", (LIST_X + LIST_R) / 2, 441) if last < @rows.size - 1
+  end
+  #--------------------------------------------------------------------------
+  # * One row, drawn once and kept while it is near the visible area
+  #--------------------------------------------------------------------------
+  def row_bitmap(i)
+    @row_cache = {} if @row_cache == nil
+    for k in @row_cache.keys
+      next if k >= @top - 4 and k <= @top + 8
+      @row_cache[k].dispose
+      @row_cache.delete(k)
+    end
+    return @row_cache[i] if @row_cache[i] != nil
+    r = @rows[i]
+    b = Bitmap.new(LIST_R, row_h(i))
+    if r["type"] == :group
+      draw_group_row(b, r, 0)
+    else
+      draw_empty_row(b, r, 0)
+    end
+    b.fill_rect(LIST_X, row_h(i) - 1, LIST_R - LIST_X, 1, LINE2)
+    @row_cache[i] = b
+    return b
+  end
+  #--------------------------------------------------------------------------
+  def add_row_walkers(r, y)
+    for k in 0...GROUP_SIZE
+      id = r["ids"][k]
+      next if id == nil
+      leader = (k == 0)
+      add_walker($game_actors[id], SLOT_X[k], y + FOOT_Y + (leader ? 1 : 2), leader ? 1.5 : 1.25)
+    end
+  end
+  #--------------------------------------------------------------------------
+  #--------------------------------------------------------------------------
+  # * Shapes that repeat in every row, drawn once per menu and then copied
+  #   (keeps scrolling fast with any number of groups)
+  #--------------------------------------------------------------------------
+  def part(name)
+    @parts = {} if @parts == nil
+    return @parts[name] if @parts[name] != nil
+    case name
+    when "seal_red", "seal_gray"
+      b = new_bitmap(40, 40)
+      BookMenu.ellipse(b, 20, 20, 18, 18, name == "seal_red" ? RED : SEAL_GRAY)
+      p = BookMenu.painter(b)
+      for yy in 3..37
+        for xx in 3..37
+          d = Math.sqrt((xx + 0.5 - 20) ** 2 + (yy + 0.5 - 20) ** 2)
+          a = 1.0 - (d - 15.0).abs
+          p.blend(xx, yy, PARCH, a * 0.9) if a > 0
+        end
+      end
+    when "base"
+      b = new_bitmap(52, 16)
+      BookMenu.ellipse(b, 26, 8, 24, 6, BASE_RIM)
+      BookMenu.ellipse(b, 26, 7, 22, 4.5, BASE)
+    when "shadow"
+      b = new_bitmap(40, 14)
+      BookMenu.ellipse(b, 20, 7, 17, 4.5, SHADE, true)
+    when "free"
+      b = new_bitmap(44, 44)
+      BookMenu.dashed_rect(b, 0, 0, 44, 44, 6, LINE, 2, 5, 4)
+      p = BookMenu.painter(b)
+      p.font(22, false, false, INK2)
+      p.text(22, 29, "+", 1)
+    when "companion"
+      b = new_bitmap(50, 50)
+      BookMenu.dashed_circle(b, 25, 25, 21, LINE, 2, 5, 4)
+      BookMenu.paw(b, 25, 26, Color.new(LINE2.red, LINE2.green, LINE2.blue, 200))
+    when "more"
+      b = new_bitmap(160, 16)
       p = BookMenu.painter(b)
       p.font(13, false, true, INK2)
       w = p.width_of("weitere Gruppen")
-      x = (LIST_X + LIST_R) / 2 - (w + 14) / 2
-      BookMenu.chevron(b, x, 437, INK)
-      p.text(x + 14, 445, "weitere Gruppen")
+      x = 80 - (w + 14) / 2
+      BookMenu.chevron(b, x, 4, INK)
+      p.text(x + 14, 12, "weitere Gruppen")
+    when "empty_active", "empty_locked"
+      b = new_bitmap(LIST_R - LIST_X, EMPTY_H)
+      b.blt(SEAL_X - LIST_X - 20, 12, part("seal_gray"), Rect.new(0, 0, 40, 40))
+      bx = 268 - LIST_X
+      BookMenu.dashed_rect(b, bx, 10, LIST_R - 268, 44, 8, LINE, 2, 6, 4)
+      p = BookMenu.painter(b)
+      p.font(15, false, true, INK2)
+      w = p.width_of("Leere Gruppe")
+      tx = bx + (LIST_R - 268) / 2 - (w + 20) / 2
+      if name == "empty_active"
+        p.font(18, false, false, INK2)
+        p.text(tx, 38, "+")
+      else
+        BookMenu.lock(b, tx, 25, INK2)
+      end
+      p.font(15, false, true, INK2)
+      p.text(tx + 20, 37, "Leere Gruppe")
     end
+    @parts[name] = b
+    return b
   end
   #--------------------------------------------------------------------------
-  def draw_seal(b, n, cy, color)
-    BookMenu.ellipse(b, SEAL_X, cy, 18, 18, color)
+  def blt_center(b, name, cx, cy, opacity = 255)
+    src = part(name)
+    b.blt(cx - src.width / 2, cy - src.height / 2, src, src.rect, opacity)
+  end
+  #--------------------------------------------------------------------------
+  def draw_numeral(b, n, cy, alpha = 255)
     p = BookMenu.painter(b)
-    for yy in (cy - 17)..(cy + 17)
-      for xx in (SEAL_X - 17)..(SEAL_X + 17)
-        d = Math.sqrt((xx + 0.5 - SEAL_X) ** 2 + (yy + 0.5 - cy) ** 2)
-        a = 1.0 - (d - 15.0).abs
-        p.blend(xx, yy, PARCH, a * 0.9) if a > 0
-      end
-    end
-    p.font(n > 3 ? 13 : 15, true, false, PARCH)
-    p.fit(BookMenu.roman(n), 24, 9)
-    p.text(SEAL_X, cy + 5, BookMenu.roman(n), 1)
+    text = BookMenu.roman(n)
+    BookMenu.seal_font(p, text)
+    b.font.color = Color.new(PARCH.red, PARCH.green, PARCH.blue, alpha)
+    p.text(SEAL_X, cy + 5, text, 1)
   end
   #--------------------------------------------------------------------------
   def draw_group_row(b, r, y)
-    draw_seal(b, r["n"], y + 50, RED)
+    blt_center(b, "seal_red", SEAL_X, y + 50)
+    draw_numeral(b, r["n"], y + 50)
     p = BookMenu.painter(b)
     for k in 0...GROUP_SIZE
       cx = SLOT_X[k]
       id = r["ids"][k]
       if id == nil
-        BookMenu.dashed_rect(b, cx - 22, y + 30, 44, 44, 6, LINE, 2, 5, 4)
-        p.font(22, false, false, INK2)
-        p.text(cx, y + 59, "+", 1)
+        blt_center(b, "free", cx, y + 52)
         p.font(12, false, true, INK2)
         p.text(cx, y + NAME_Y, "Freier Platz", 1)
         next
@@ -598,12 +692,10 @@ class Scene_Menu
       actor = $game_actors[id]
       leader = (k == 0)
       if leader
-        BookMenu.ellipse(b, cx, y + FOOT_Y, 24, 6, BASE_RIM)
-        BookMenu.ellipse(b, cx, y + FOOT_Y - 1, 22, 4.5, BASE)
+        blt_center(b, "base", cx, y + FOOT_Y)
       else
-        BookMenu.ellipse(b, cx, y + FOOT_Y, 17, 4.5, SHADE, true)
+        blt_center(b, "shadow", cx, y + FOOT_Y)
       end
-      add_walker(actor, cx, y + FOOT_Y + (leader ? 1 : 2), leader ? 1.5 : 1.25)
       p.font(13, true, false, leader ? RED : INK)
       name = p.fit_text(actor.name, 80, 10)
       p.text(cx, y + NAME_Y, name, 1)
@@ -614,44 +706,16 @@ class Scene_Menu
     end
     # Begleiter slot
     cx = SLOT_X[3]
-    BookMenu.dashed_circle(b, cx, y + 50, 21, LINE, 2, 5, 4)
-    BookMenu.paw(b, cx, y + 51, Color.new(LINE2.red, LINE2.green, LINE2.blue, 200))
+    blt_center(b, "companion", cx, y + 50)
     p.font(12, false, true, INK2)
     p.text(cx, y + NAME_Y, "Begleiter", 1)
   end
   #--------------------------------------------------------------------------
   def draw_empty_row(b, r, y)
-    t = Bitmap.new(LIST_R - LIST_X, EMPTY_H)
-    ox = LIST_X
-    # draw at list coordinates shifted by -ox
-    BookMenu.ellipse(t, SEAL_X - ox, 32, 18, 18, SEAL_GRAY)
-    p = BookMenu.painter(t)
-    for yy in 15..49
-      for xx in (SEAL_X - ox - 17)..(SEAL_X - ox + 17)
-        d = Math.sqrt((xx + 0.5 - (SEAL_X - ox)) ** 2 + (yy + 0.5 - 32) ** 2)
-        a = 1.0 - (d - 15.0).abs
-        p.blend(xx, yy, PARCH, a * 0.9) if a > 0
-      end
-    end
-    p.font(r["n"] > 3 ? 13 : 15, true, false, PARCH)
-    p.fit(BookMenu.roman(r["n"]), 24, 9)
-    p.text(SEAL_X - ox, 37, BookMenu.roman(r["n"]), 1)
-    bx = 268 - ox
-    BookMenu.dashed_rect(t, bx, 10, LIST_R - 268, 44, 8, LINE, 2, 6, 4)
-    p.font(15, false, true, INK2)
-    w = p.width_of("Leere Gruppe")
-    cx = bx + (LIST_R - 268) / 2
-    tx = cx - (w + 20) / 2
-    if r["active"]
-      p.font(18, false, false, INK2)
-      p.text(tx, 38, "+")
-    else
-      BookMenu.lock(t, tx, 25, INK2)
-    end
-    p.font(15, false, true, INK2)
-    p.text(tx + 20, 37, "Leere Gruppe")
-    b.blt(ox, y, t, t.rect, r["active"] ? 255 : 120)
-    t.dispose
+    t = part(r["active"] ? "empty_active" : "empty_locked")
+    alpha = r["active"] ? 255 : 120
+    b.blt(LIST_X, y, t, t.rect, alpha)
+    draw_numeral(b, r["n"], y + 32, alpha)
   end
   #--------------------------------------------------------------------------
   # * Walk sprite (standing, facing down), feet at x, y
@@ -892,5 +956,16 @@ class Scene_Menu
         $scene = Scene_Status.new($game_party.actors.index(actor))
       end
     end
+  end
+end
+
+#==============================================================================
+# ** Window_SaveFile - the save slot preview shows only the main character
+#==============================================================================
+class Window_SaveFile < Window_Base
+  alias bookmenu_refresh refresh
+  def refresh
+    @characters = @characters[0, 1] if @characters.is_a?(Array) and @characters.size > 1
+    bookmenu_refresh
   end
 end
