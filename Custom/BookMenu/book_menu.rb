@@ -257,6 +257,8 @@ class Game_Party
   #--------------------------------------------------------------------------
   def menu_groups
     @menu_groups = [] if @menu_groups == nil
+    # during a fight the party is only one squad: don't re-sort then
+    return @menu_groups if $game_temp != nil and $game_temp.in_battle
     ids = @actors.collect { |a| a.id }
     # drop actors that left the party, close the gaps
     @menu_groups.each { |g| g.delete_if { |id| !ids.include?(id) } }

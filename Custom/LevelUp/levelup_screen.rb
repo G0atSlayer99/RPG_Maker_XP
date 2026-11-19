@@ -139,13 +139,15 @@ module LevelUp
   #--------------------------------------------------------------------------
   # * Shows every queued level-up, then clears the key that closed it
   #--------------------------------------------------------------------------
-  def self.run(spriteset = nil)
+  # focus: map character whose tile is highlighted (default: the player;
+  # FE Tactics passes the squad's unit)
+  def self.run(spriteset = nil, focus = nil)
     while pending?
       e = queue.shift
       actor = $game_actors[e["actor"]]
       next if actor == nil
       log("open actor " + e["actor"].to_s + " Lv " + e["from"].to_s + "->" + e["to"].to_s)
-      screen = Screen.new(actor, e)
+      screen = Screen.new(actor, e, focus)
       until screen.done?
         Graphics.update
         Input.update
@@ -281,8 +283,9 @@ module LevelUp
   class Screen
     attr_reader :sprites, :phase, :gains
     #------------------------------------------------------------------------
-    def initialize(actor, entry)
+    def initialize(actor, entry, focus = nil)
       @actor = actor
+      @focus = focus
       @from = entry["from"]
       @to = entry["to"]
       @old = entry["old"]
@@ -324,8 +327,9 @@ module LevelUp
     # * Positions: player tile, window bottom (or top if the tile is under it)
     #------------------------------------------------------------------------
     def layout
-      @px = $game_player.screen_x
-      @py = $game_player.screen_y
+      c = @focus || $game_player
+      @px = c.screen_x
+      @py = c.screen_y
       @win_x = 16
       bottom_y = 480 - 16 - WIN_H
       @top = (@py - 32 > bottom_y - 8)    # tile (mostly) under the window
