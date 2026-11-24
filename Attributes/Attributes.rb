@@ -1,5 +1,5 @@
 #==============================================================================
-# ** Attributes  v2.2
+# ** Attributes  v2.3
 #------------------------------------------------------------------------------
 #  Extra database attributes, edited with AttributesEditor.exe (the panel that
 #  opens next to the Database window) and stored in Data/Attributes.rxdata.
@@ -20,7 +20,11 @@
 #  (RPG Maker XP itself still limits MaxHP / MaxSP to 9999). The gains are
 #  kept in the actor (and save file); level-downs keep them.
 #  Crtr, CrtD and Move stay at their level 1 value.
-#  Actors not edited in the panel keep the Database values and curves.
+#  Actors not edited in the panel keep the Database values, but every actor
+#  needs EXP_PER_LEVEL (100) EXP per level-up (edited ones: the panel's
+#  "EXP per level-up"), up to the Database / panel max level.
+#  Loading a save rebuilds every actor's EXP table from these settings and
+#  caps HP / SP at their maximum, so panel changes also reach old saves.
 #
 #  Crit Rate   : chance (0 - 100 %) that an attack / skill is a critical hit
 #  Crit Damage : extra damage of a critical hit in % (100 = double damage)
@@ -129,6 +133,7 @@ module Attributes
   # * Actor attributes from the Actors page
   #--------------------------------------------------------------------------
   MAX_LEVEL = 100
+  EXP_PER_LEVEL = 100   # EXP per level-up for actors not edited in the panel
   def self.actor_edited?(id)
     return set?("actors", id, "hp")
   end
@@ -520,11 +525,26 @@ class Game_Actor < Game_Battler
   def make_exp_list
     attributes_make_exp_list
     lv = Attributes.actor_level(@actor_id)
-    return if lv == nil
+    if lv == nil   # not edited: EXP_PER_LEVEL each, up to the Database max level
+      lv = [1, $data_actors[@actor_id].final_level, Attributes::EXP_PER_LEVEL]
+    end
     @exp_list[1] = 0
     for i in 2..(Attributes::MAX_LEVEL + 1)
       @exp_list[i] = i <= lv[1] ? (i - 1) * lv[2] : 0
     end
+  end
+  #--------------------------------------------------------------------------
+  # * After loading a save: EXP table from the current settings, EXP inside
+  #   the current level, HP / SP not above their maximum
+  #--------------------------------------------------------------------------
+  def attributes_refresh_after_load
+    make_exp_list
+    low = @exp_list[@level] || 0
+    nxt = @exp_list[@level + 1].to_i
+    @exp = [@exp, low].max
+    @exp = [@exp, nxt - 1].min if nxt > 0
+    @hp = [@hp, maxhp].min
+    @sp = [@sp, maxsp].min
   end
   #--------------------------------------------------------------------------
   def level=(level)
@@ -656,5 +676,17 @@ class Game_Character
       m != nil ? m : attributes_move_points
     end
     @attributes_patching = false
+  end
+end
+
+#==============================================================================
+# ** Scene_Load - refresh every actor after loading a save
+#==============================================================================
+class Scene_Load
+  alias attributes_read_save_data read_save_data
+  def read_save_data(file)
+    attributes_read_save_data(file)
+    list = $game_actors.instance_variable_get(:@data) || []
+    list.each { |a| a.attributes_refresh_after_load if a != nil }
   end
 end

@@ -91,7 +91,7 @@ begin
       end
     end
   end
-  $game_map.setup(1)
+  $game_map.setup(2)   # Map002: old <start> / <enemy> markers
   $game_player.moveto($data_system.start_x, $data_system.start_y)
   $game_player.refresh
   $game_map.update
@@ -334,7 +334,7 @@ begin
   starts = evs.select { |ev| ev.fe_name =~ /squad|start/i }
   starts.each_with_index { |ev, i| ev.instance_variable_get(:@event).name = (i == 0 ? "<Squad 1>" : "-") }
   foes_ev = evs.select { |ev| ev.fe_name.include?("<enemy>") }
-  foes_ev[0].instance_variable_get(:@event).name = "<Enemy 1>"
+  foes_ev.each_with_index { |ev, i| ev.instance_variable_get(:@event).name = (i == 0 ? "<Enemy 1>" : "-") }
   $data_enemies[$data_troops[1].members[0].enemy_id].battler_name = "does-not-exist"
   b = new_battle
   us = b.instance_variable_get(:@units)
