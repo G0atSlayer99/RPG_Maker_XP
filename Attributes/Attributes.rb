@@ -1,5 +1,5 @@
 #==============================================================================
-# ** Attributes  v2.3
+# ** Attributes  v2.4
 #------------------------------------------------------------------------------
 #  Extra database attributes, edited with AttributesEditor.exe (the panel that
 #  opens next to the Database window) and stored in Data/Attributes.rxdata.
@@ -25,6 +25,25 @@
 #  "EXP per level-up"), up to the Database / panel max level.
 #  Loading a save rebuilds every actor's EXP table from these settings and
 #  caps HP / SP at their maximum, so panel changes also reach old saves.
+#
+#  BATTLE RULES (v2.4; every battle: default battle screen and FE Tactics)
+#    Luck = DEX (actors: panel "Luck", enemies: panel or Database DEX).
+#    Attack hit chance = 100 + attacker Luck - target Luck (in %); Database
+#      hit / evasion rates are not used ("can't evade" states: at least 100).
+#    Attack damage = attacker Str - target Def (0 or more, no random spread,
+#      no elements, no Guard). Magic damage = Mg - Res (Attributes.magic_damage)
+#      is ready for the skill rework; skills still use the Database formula.
+#    Critical hit: chance = attacker CrtR + attacker Luck (%), damage x CrtD
+#      (CrtD 100 = x2). The target's Luck does not lower it.
+#    Turn order: highest Spd first; tie: higher Luck; tie: actors before
+#      enemies, then party / troop order. Guard is removed from the commands.
+#    Equipment is ignored for actors edited in the panel (no weapon ATK, no
+#      armor Def / Res, no equipment crit bonus) until the equipment rework.
+#  ENEMIES edited in the panel (Enemies page): every stat has a level 1 and a
+#    max level value; at level L it is level 1 value + (max - level 1) *
+#    (L - 1) / (max level - 1). The level comes from FE Tactics markers
+#    (<Enemy 1 Lv5>), otherwise 1. EXP, Gold, Move and Size (1 = 1 tile,
+#    2 = 2x2, 3 = 3x3 in FE Tactics) are set in the panel too.
 #
 #  Crit Rate   : chance (0 - 100 %) that an attack / skill is a critical hit
 #  Crit Damage : extra damage of a critical hit in % (100 = double damage)
@@ -199,6 +218,31 @@ module Attributes
     return 0
   end
   #--------------------------------------------------------------------------
+  # * Enemies edited in the panel
+  #--------------------------------------------------------------------------
+  ENEMY_KEYS = ["hp", "sp", "str", "mg", "spd", "luck", "def", "res", "move",
+                "crit_rate", "crit_damage"]
+  def self.enemy_edited?(id)
+    return set?("enemies", id, "hp")
+  end
+  def self.enemy_max_level(id)
+    return [[get("enemies", id, "max_level", 1).to_i, 1].max, MAX_LEVEL].min
+  end
+  # Stat of an edited enemy at a level (nil if the enemy is not edited)
+  def self.enemy_value(id, key, level)
+    return nil unless enemy_edited?(id)
+    v1 = get("enemies", id, key, 0).to_i
+    top = get("enemies", id, key + "_max", v1).to_i
+    ml = enemy_max_level(id)
+    return v1 if ml <= 1
+    l = [[level.to_i, 1].max, ml].min
+    return v1 + (top - v1) * (l - 1) / (ml - 1)
+  end
+  # FE Tactics size in tiles (1 = 1x1, 2 = 2x2, 3 = 3x3)
+  def self.enemy_size(id)
+    return [[get("enemies", id, "size", 1).to_i, 1].max, 3].min
+  end
+  #--------------------------------------------------------------------------
   # * [rate, damage]
   #--------------------------------------------------------------------------
   def self.enemy_crit(id)
@@ -279,11 +323,54 @@ class Game_Battler
     return Attributes.clamp_damage(n)
   end
   #--------------------------------------------------------------------------
+  # * Luck (= DEX)
+  #--------------------------------------------------------------------------
+  def luck
+    return dex
+  end
+  #--------------------------------------------------------------------------
+  # * Crit chance in % = CrtR + Luck (the target does not lower it)
+  #--------------------------------------------------------------------------
+  def crit_chance(extra_rate = 0)
+    return [[crit_rate + luck + extra_rate, 0].max, 100].min
+  end
+  #--------------------------------------------------------------------------
   # * Roll for a critical hit
   #--------------------------------------------------------------------------
   def critical_hit?(extra_rate = 0)
-    rate = [[crit_rate + extra_rate, 0].max, 100].min
-    return rand * 100 < rate
+    return rand * 100 < crit_chance(extra_rate)
+  end
+  #--------------------------------------------------------------------------
+  # * Attack hit chance in % on target = 100 + own Luck - target Luck
+  #--------------------------------------------------------------------------
+  def hit_chance_on(target)
+    h = 100 + luck - target.luck
+    h = [h, 100].max if target.cant_evade?
+    return [h, 0].max
+  end
+  #--------------------------------------------------------------------------
+  # * Attack damage on target = Str - Def (0 or more)
+  #--------------------------------------------------------------------------
+  def attack_damage_to(target)
+    return [str - target.pdef, 0].max
+  end
+  #--------------------------------------------------------------------------
+  # * Magic damage on target = Mg - Res (0 or more; for the skill rework)
+  #--------------------------------------------------------------------------
+  def magic_damage_to(target)
+    return [int - target.mdef, 0].max
+  end
+  #--------------------------------------------------------------------------
+  # * Guard is removed from battles
+  #--------------------------------------------------------------------------
+  def guarding?
+    return false
+  end
+  #--------------------------------------------------------------------------
+  # * Turn order value: Spd (no random part)
+  #--------------------------------------------------------------------------
+  def make_action_speed
+    @current_action.speed = agi
   end
   #--------------------------------------------------------------------------
   # * Apply crit damage to a damage value
@@ -293,33 +380,18 @@ class Game_Battler
     return (damage * (100 + bonus) / 100.0).round
   end
   #--------------------------------------------------------------------------
-  # * Applying Normal Attack Effects (default code, new critical hit)
+  # * Normal attack (v2.4 rules): hit = 100 + Luck - target Luck,
+  #   damage = Str - Def, crit = CrtR + Luck -> damage x CrtD
   #--------------------------------------------------------------------------
   def attack_effect(attacker)
     self.critical = false
-    hit_result = (rand(100) < attacker.hit)
+    hit_result = (rand(100) < attacker.hit_chance_on(self))
     if hit_result == true
-      atk = [attacker.atk - self.pdef / 2, 0].max
-      self.damage = atk * (20 + attacker.str) / 20
-      self.damage *= elements_correct(attacker.element_set)
-      self.damage /= 100
-      if self.damage > 0
-        if attacker.critical_hit?
-          self.damage = attacker.apply_crit_damage(self.damage)
-          self.critical = true
-        end
-        if self.guarding?
-          self.damage /= 2
-        end
+      self.damage = attacker.attack_damage_to(self)
+      if self.damage > 0 and attacker.critical_hit?
+        self.damage = attacker.apply_crit_damage(self.damage)
+        self.critical = true
       end
-      if self.damage.abs > 0
-        amp = [self.damage.abs * 15 / 100, 1].max
-        self.damage += rand(amp+1) + rand(amp+1) - amp
-      end
-      eva = 8 * self.agi / attacker.dex + self.eva
-      hit = self.damage < 0 ? 100 : 100 - eva
-      hit = self.cant_evade? ? 100 : hit
-      hit_result = (rand(100) < hit)
     end
     if hit_result == true
       remove_states_shock
@@ -585,18 +657,20 @@ class Game_Actor < Game_Battler
   end
   #--------------------------------------------------------------------------
   def base_pdef
-    return attributes_base_pdef + (attr_value("def") || 0)
+    v = attr_value("def")                   # edited: panel Def only, no armor
+    return v != nil ? v : attributes_base_pdef
   end
   #--------------------------------------------------------------------------
   def base_mdef
-    return attributes_base_mdef + (attr_value("res") || 0)
+    v = attr_value("res")                   # edited: panel Res only, no armor
+    return v != nil ? v : attributes_base_mdef
   end
   #--------------------------------------------------------------------------
   def base_crit_rate
     v = Attributes.actor_crit(@actor_id)
     n = v[0] + v[1] * (@level - 1)
     p = attr_value("crit_rate")
-    n = p if p != nil
+    return p if p != nil                    # edited: no equipment bonus
     n += Attributes.crit_bonus("weapons", @weapon_id)[0]
     for id in [@armor1_id, @armor2_id, @armor3_id, @armor4_id]
       n += Attributes.crit_bonus("armors", id)[0]
@@ -608,7 +682,7 @@ class Game_Actor < Game_Battler
     v = Attributes.actor_crit(@actor_id)
     n = v[2] + v[3] * (@level - 1)
     p = attr_value("crit_damage")
-    n = p if p != nil
+    return p if p != nil                    # edited: no equipment bonus
     n += Attributes.crit_bonus("weapons", @weapon_id)[1]
     for id in [@armor1_id, @armor2_id, @armor3_id, @armor4_id]
       n += Attributes.crit_bonus("armors", id)[1]
@@ -622,13 +696,133 @@ end
 #==============================================================================
 
 class Game_Enemy < Game_Battler
+  unless method_defined?(:attributes_enemy_maxhp)
+    alias attributes_enemy_maxhp base_maxhp
+    alias attributes_enemy_maxsp base_maxsp
+    alias attributes_enemy_str   base_str
+    alias attributes_enemy_int   base_int
+    alias attributes_enemy_agi   base_agi
+    alias attributes_enemy_dex   base_dex
+    alias attributes_enemy_pdef  base_pdef
+    alias attributes_enemy_mdef  base_mdef
+    alias attributes_enemy_exp   exp
+    alias attributes_enemy_gold  gold
+  end
+  #--------------------------------------------------------------------------
+  # * Level (FE Tactics markers <Enemy 1 Lv5>; otherwise 1). Setting it
+  #   refills HP / SP to the new maximum.
+  #--------------------------------------------------------------------------
+  def level
+    return @level || 1
+  end
+  def level=(lv)
+    @level = [[lv.to_i, 1].max, Attributes::MAX_LEVEL].min
+    @hp = maxhp
+    @sp = maxsp
+  end
+  #--------------------------------------------------------------------------
+  def enemy_attr(key)
+    return Attributes.enemy_value(@enemy_id, key, level)
+  end
+  def base_maxhp; v = enemy_attr("hp");   return v != nil ? v : attributes_enemy_maxhp; end
+  def base_maxsp; v = enemy_attr("sp");   return v != nil ? v : attributes_enemy_maxsp; end
+  def base_str;   v = enemy_attr("str");  return v != nil ? v : attributes_enemy_str;   end
+  def base_int;   v = enemy_attr("mg");   return v != nil ? v : attributes_enemy_int;   end
+  def base_agi;   v = enemy_attr("spd");  return v != nil ? v : attributes_enemy_agi;   end
+  def base_dex;   v = enemy_attr("luck"); return v != nil ? v : attributes_enemy_dex;   end
+  def base_pdef;  v = enemy_attr("def");  return v != nil ? v : attributes_enemy_pdef;  end
+  def base_mdef;  v = enemy_attr("res");  return v != nil ? v : attributes_enemy_mdef;  end
+  #--------------------------------------------------------------------------
+  # * Rewards: panel values for edited enemies
+  #--------------------------------------------------------------------------
+  def exp
+    return attributes_enemy_exp unless Attributes.enemy_edited?(@enemy_id)
+    return Attributes.get("enemies", @enemy_id, "exp", 0).to_i
+  end
+  def gold
+    return attributes_enemy_gold unless Attributes.enemy_edited?(@enemy_id)
+    return Attributes.get("enemies", @enemy_id, "gold", 0).to_i
+  end
+  # FE Tactics: move points (nil = not edited) and size in tiles
+  def attr_move
+    return enemy_attr("move")
+  end
+  def attr_size
+    return Attributes.enemy_size(@enemy_id)
+  end
   #--------------------------------------------------------------------------
   def base_crit_rate
-    return Attributes.enemy_crit(@enemy_id)[0]
+    v = enemy_attr("crit_rate")
+    return v != nil ? v : Attributes.enemy_crit(@enemy_id)[0]
   end
   #--------------------------------------------------------------------------
   def base_crit_damage
-    return Attributes.enemy_crit(@enemy_id)[1]
+    v = enemy_attr("crit_damage")
+    return v != nil ? v : Attributes.enemy_crit(@enemy_id)[1]
+  end
+end
+
+#==============================================================================
+# ** Scene_Battle - turn order by Spd / Luck, no Guard command
+#==============================================================================
+class Scene_Battle
+  #--------------------------------------------------------------------------
+  # * Turn order: Spd, then Luck, then actors before enemies, then the
+  #   party / troop order
+  #--------------------------------------------------------------------------
+  def make_action_orders
+    list = []
+    $game_party.actors.each_with_index { |a, i| list.push([a, 0, i]) }
+    $game_troop.enemies.each_with_index { |e, i| list.push([e, 1, i]) }
+    list.each { |x| x[0].make_action_speed }
+    list = list.sort_by { |x| [-x[0].agi, -x[0].luck, x[1], x[2]] }
+    @action_battlers = list.collect { |x| x[0] }
+  end
+  #--------------------------------------------------------------------------
+  # * Actor commands without Guard: Attack, Skill, Item
+  #--------------------------------------------------------------------------
+  unless method_defined?(:attributes_phase3_setup_command_window)
+    alias attributes_phase3_setup_command_window phase3_setup_command_window
+  end
+  def phase3_setup_command_window
+    if @actor_command_window.instance_variable_get(:@commands).size == 4
+      w = @actor_command_window
+      @actor_command_window = Window_Command.new(160, [$data_system.words.attack,
+        $data_system.words.skill, $data_system.words.item])
+      @actor_command_window.y = w.y
+      @actor_command_window.z = w.z
+      @actor_command_window.back_opacity = w.back_opacity
+      @actor_command_window.active = false
+      @actor_command_window.visible = false
+      w.dispose
+    end
+    attributes_phase3_setup_command_window
+  end
+  #--------------------------------------------------------------------------
+  def update_phase3_basic_command
+    if Input.trigger?(Input::B)
+      $game_system.se_play($data_system.cancel_se)
+      phase3_prior_actor
+      return
+    end
+    if Input.trigger?(Input::C)
+      case @actor_command_window.index
+      when 0  # attack
+        $game_system.se_play($data_system.decision_se)
+        @active_battler.current_action.kind = 0
+        @active_battler.current_action.basic = 0
+        start_enemy_select
+      when 1  # skill
+        $game_system.se_play($data_system.decision_se)
+        @active_battler.current_action.kind = 1
+        start_skill_select
+      when 2  # item
+        $game_system.se_play($data_system.decision_se)
+        @active_battler.current_action.kind = 2
+        start_item_select
+      end
+      return
+    end
   end
 end
 

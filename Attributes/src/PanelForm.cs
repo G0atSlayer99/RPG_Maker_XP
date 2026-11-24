@@ -79,8 +79,9 @@ namespace XpAttributes
         Label aExpHint, aDefault;
         readonly List<StatRow> aStats = new List<StatRow>();
         // Enemy page
-        NumericUpDown eRate, eDmg;
+        NumericUpDown eMaxLevel, eExp, eGold, eSize;
         Label eDefault;
+        readonly List<StatRow> eStats = new List<StatRow>();
         // Weapon / armor / state page
         GroupBox bGroup;
         NumericUpDown bRate, bDmg;
@@ -236,14 +237,14 @@ namespace XpAttributes
         {
             new StatDef("hp", "HP", "health points, 1 – 10000", 1, 10000, 0, 0, "Health points of the character."),
             new StatDef("sp", "SP", "skill points, 1 – 1000", 1, 1000, 1, 0, "Used for special skills like healing or magic."),
-            new StatDef("str", "Str", "strength, 1 – 100", 1, 100, 2, 0, "Determines how much damage the character deals."),
-            new StatDef("mg", "Mg", "magic, 1 – 100", 1, 100, 5, 0, "Magic damage dealt and healing done."),
-            new StatDef("crit_rate", "Crtr", "crit rate, 0 – 100 %", 0, 100, -1, 5, "Chance to deal additional damage."),
-            new StatDef("crit_damage", "CrtD", "crit damage, 100 % = ×2", 0, 10000, -1, 100, "Base is ×2: damage + 100 % damage."),
-            new StatDef("spd", "Spd", "speed, 1 – 100", 1, 100, 4, 0, "The faster character attacks first."),
-            new StatDef("luck", "Luck", "1 – 100", 1, 100, 3, 0, "Enemy attacks miss more often, own attacks hit more often."),
-            new StatDef("def", "Def", "defense, 1 – 100", 1, 100, -1, 4, "Damage taken = enemy Str + weapon ATK − Def."),
-            new StatDef("res", "Res", "resistance, 1 – 100", 1, 100, -1, 2, "Damage taken = enemy Mg + weapon ATK − Res."),
+            new StatDef("str", "Str", "strength, 1 – 100", 1, 100, 2, 0, "Attack damage = Str − target's Def."),
+            new StatDef("mg", "Mg", "magic, 1 – 100", 1, 100, 5, 0, "Magic damage = Mg − target's Res (skills keep the Database formula for now)."),
+            new StatDef("crit_rate", "Crtr", "crit rate, 0 – 100 %", 0, 100, -1, 5, "Crit chance = CrtR + Luck (%)."),
+            new StatDef("crit_damage", "CrtD", "crit damage, 100 % = ×2", 0, 10000, -1, 100, "A crit multiplies the damage: 100 % = ×2."),
+            new StatDef("spd", "Spd", "speed, 1 – 100", 1, 100, 4, 0, "Highest Spd acts first; a tie goes to the higher Luck."),
+            new StatDef("luck", "Luck", "1 – 100", 1, 100, 3, 0, "Each point: +1 % crit, +1 % hit, +1 % evasion."),
+            new StatDef("def", "Def", "defense, 0 – 100", 0, 100, -1, 4, "Physical damage taken = attacker's Str − Def."),
+            new StatDef("res", "Res", "resistance, 0 – 100", 0, 100, -1, 2, "Magic damage taken = attacker's Mg − Res."),
             new StatDef("move", "Move", "squares, 1 – 25", 1, 25, -1, 5, "Squares the character can move on the board."),
         };
 
@@ -325,17 +326,154 @@ namespace XpAttributes
 
         void BuildEnemyPage()
         {
-            var p = NewPage(PanelMode.Enemies, 200);
-            EventHandler ch = (s, e) => OnEntryEdited();
-            var g = new GroupBox { Text = "Critical hits", Location = new Point(8, 0), Size = new Size(284, 84) };
-            eRate = Row(g, "Crit Rate", 22, 0, 100, 1, "%", 100, ch);
-            eDmg = Row(g, "Crit Damage", 50, 0, 10000, 1, "%  (100 = ×2)", 100, ch);
-            p.Controls.Add(g);
-            eDefault = Help(p, "", 92, 34);
-            var reset = new Button { Text = "Reset to defaults", Location = new Point(8, 128), Size = new Size(130, 25) };
-            reset.Click += (s, e) => ResetCrit();
-            p.Controls.Add(reset);
-            Help(p, "States can add more while they are active.", 162, 34);
+            const int gw = 284;
+            int y = 0;
+            Label cap;
+            var p = NewPage(PanelMode.Enemies, 100);
+            EventHandler ch = (s, e) => OnEnemyEdited(s);
+
+            // Level
+            var gl = new GroupBox { Text = "LV  (level, max. " + MaxActorLevel + ")", Location = new Point(8, y), Size = new Size(gw, 100) };
+            eMaxLevel = Field(gl, "Max level", 10, 20, 82, 1, MaxActorLevel, ch, out cap);
+            gl.Controls.Add(new Label
+            {
+                Text = "Stats grow evenly from Level 1 to Max level. The level is set on the map: <Enemy 1 Lv5> = Troop 1 at level 5.",
+                Location = new Point(101, 20), Size = new Size(176, 74), ForeColor = Color.DimGray
+            });
+            p.Controls.Add(gl);
+            y += gl.Height + 8;
+
+            // Rewards and size
+            var gr = new GroupBox { Text = "Rewards and size", Location = new Point(8, y), Size = new Size(gw, 114) };
+            eExp = Field(gr, "EXP", 10, 20, 82, 0, 999999, ch, out cap);
+            eGold = Field(gr, "Gold", 101, 20, 82, 0, 9999999, ch, out cap);
+            eSize = Field(gr, "Size (tiles)", 192, 20, 82, 1, 3, ch, out cap);
+            gr.Controls.Add(new Label { Text = "When defeated: EXP to every living squad member, Gold once. Size: 1 = 1×1, 2 = 2×2, 3 = 3×3 on the map.", Location = new Point(10, 62), Size = new Size(264, 48), ForeColor = Color.DimGray });
+            p.Controls.Add(gr);
+            y += gr.Height + 8;
+
+            // Attributes
+            foreach (var d in ActorStats)
+            {
+                var g = new GroupBox { Text = d.Title + "  (" + d.Desc + ")", Location = new Point(8, y), Size = new Size(gw, 98) };
+                var row = new StatRow { Def = d };
+                row.Lv1 = Field(g, "Level 1", 10, 20, 127, d.Min, d.Max, ch, out cap);
+                row.Max = Field(g, "Max level", 147, 20, 127, d.Min, d.Max, ch, out row.MaxLabel);
+                g.Controls.Add(new Label { Text = d.Hint, Location = new Point(10, 62), Size = new Size(264, 32), ForeColor = Color.DimGray });
+                p.Controls.Add(g);
+                eStats.Add(row);
+                y += g.Height + 8;
+            }
+
+            var reset = new Button { Text = "Reset to defaults", Location = new Point(8, y + 2), Size = new Size(130, 25) };
+            reset.Click += (s, e) => ResetEnemy();
+            eDefault = new Label { Location = new Point(146, y + 2), Size = new Size(146, 34), ForeColor = Color.DimGray };
+            p.Controls.AddRange(new Control[] { reset, eDefault });
+            p.Height = y + 40;
+        }
+
+        /// <summary>
+        /// Starting values of an enemy that wasn't edited yet: stats from the Database (MaxHP, MaxSP, STR, INT,
+        /// AGI, DEX, PDEF, MDEF) for every level, crit from the System tab defaults, Move 5, EXP / Gold from the
+        /// Database, Size 1, Max level 1.
+        /// </summary>
+        public static Dictionary<string, int> EnemyDefaults(AttrConfig c, DbEntry e)
+        {
+            var d = new Dictionary<string, int>();
+            var db = new Dictionary<string, string> { { "hp", "maxhp" }, { "sp", "maxsp" }, { "str", "str" }, { "mg", "int" },
+                { "spd", "agi" }, { "luck", "dex" }, { "def", "pdef" }, { "res", "mdef" } };
+            foreach (var s in ActorStats)
+            {
+                double v = s.Default;
+                string k;
+                if (db.TryGetValue(s.Key, out k) && e != null) v = e.Field(k, s.Default);
+                else if (s.Key == "crit_rate") v = c.Has("enemies", e != null ? e.Id : 0, "crit_rate") ? c.D("enemies", e.Id, "crit_rate", 5) : c.EnemyDefault[0];
+                else if (s.Key == "crit_damage") v = c.Has("enemies", e != null ? e.Id : 0, "crit_damage") ? c.D("enemies", e.Id, "crit_damage", 100) : c.EnemyDefault[1];
+                int a = Clamp(v, s.Min, s.Max);
+                d[s.Key] = a;
+                d[s.Key + "_max"] = a;
+            }
+            d["max_level"] = 1;
+            d["exp"] = e != null ? Math.Max(0, e.Field("exp", 0)) : 0;
+            d["gold"] = e != null ? Math.Max(0, e.Field("gold", 0)) : 0;
+            d["size"] = 1;
+            return d;
+        }
+
+        void LoadEnemy(Project p)
+        {
+            var c = p.Config;
+            const string sec = "enemies";
+            var d = EnemyDefaults(c, p.Find(sec, entryId));
+            bool edited = c.Has(sec, entryId, "hp");
+            SetNum(eMaxLevel, c.D(sec, entryId, "max_level", d["max_level"]));
+            SetNum(eExp, c.D(sec, entryId, "exp", d["exp"]));
+            SetNum(eGold, c.D(sec, entryId, "gold", d["gold"]));
+            SetNum(eSize, c.D(sec, entryId, "size", d["size"]));
+            foreach (var r in eStats)
+            {
+                double lv1 = edited ? c.D(sec, entryId, r.Def.Key, d[r.Def.Key]) : d[r.Def.Key];
+                double top = edited ? c.D(sec, entryId, r.Def.Key + "_max", lv1) : d[r.Def.Key + "_max"];
+                SetNum(r.Max, top);
+                SetNum(r.Lv1, Math.Min(lv1, (double)r.Max.Value));
+            }
+            eDefault.Text = edited ? "Edited." : "Not edited yet – uses the Database values.";
+            UpdateEnemyLabels();
+        }
+
+        void UpdateEnemyLabels()
+        {
+            string max = "Max level (Lv " + eMaxLevel.Value + ")";
+            foreach (var r in eStats) r.MaxLabel.Text = max;
+        }
+
+        void OnEnemyEdited(object sender)
+        {
+            if (loading) return;
+            var p = ctl.Project;
+            if (p == null || mode != PanelMode.Enemies) return;
+            loading = true;
+            try
+            {
+                foreach (var r in eStats)
+                {
+                    if (r.Lv1.Value <= r.Max.Value) continue;
+                    if (sender == r.Max) r.Lv1.Value = r.Max.Value;
+                    else r.Max.Value = r.Lv1.Value;
+                }
+            }
+            finally { loading = false; }
+            var c = p.Config;
+            const string sec = "enemies";
+            c.Set(sec, entryId, "max_level", V(eMaxLevel));
+            c.Set(sec, entryId, "exp", V(eExp));
+            c.Set(sec, entryId, "gold", V(eGold));
+            c.Set(sec, entryId, "size", V(eSize));
+            foreach (var r in eStats)
+            {
+                c.Set(sec, entryId, r.Def.Key, V(r.Lv1));
+                c.Set(sec, entryId, r.Def.Key + "_max", V(r.Max));
+            }
+            eDefault.Text = "Edited.";
+            UpdateEnemyLabels();
+            ctl.ScheduleSave();
+        }
+
+        void ResetEnemy()
+        {
+            var p = ctl.Project;
+            if (p == null) return;
+            p.Config.Clear("enemies", entryId);
+            LoadValues();
+            ctl.ScheduleSave();
+        }
+
+        /// <summary>Self-test: sets one enemy stat and the level / reward fields like a user would.</summary>
+        public void TestSetEnemy(string key, int lv1, int top, int maxLevel, int exp, int gold, int size)
+        {
+            eMaxLevel.Value = maxLevel; eExp.Value = exp; eGold.Value = gold; eSize.Value = size;
+            foreach (var r in eStats)
+                if (r.Def.Key == key) { r.Max.Value = top; r.Lv1.Value = lv1; }
         }
 
         void BuildBonusPage()
@@ -581,13 +719,8 @@ namespace XpAttributes
                         LoadActor(p);
                         break;
                     case PanelMode.Enemies:
-                        {
-                            bool def = !c.Has(sec, entryId, "crit_rate");
-                            SetNum(eRate, c.D(sec, entryId, "crit_rate", c.EnemyDefault[0]));
-                            SetNum(eDmg, c.D(sec, entryId, "crit_damage", c.EnemyDefault[1]));
-                            ShowDefaultHint(eDefault, def);
-                            break;
-                        }
+                        LoadEnemy(p);
+                        break;
                     case PanelMode.Weapons:
                     case PanelMode.Armors:
                     case PanelMode.States:
@@ -823,11 +956,6 @@ namespace XpAttributes
             var c = p.Config;
             switch (mode)
             {
-                case PanelMode.Enemies:
-                    c.Set(sec, entryId, "crit_rate", V(eRate));
-                    c.Set(sec, entryId, "crit_damage", V(eDmg));
-                    ShowDefaultHint(eDefault, false);
-                    break;
                 case PanelMode.Skills:
                     if (sRangeMax.Value < sRangeMin.Value)
                     {

@@ -150,6 +150,11 @@ begin
   de = $data_enemies[foe.members[0].id]
   de.atk = 0; de.str = 0; de.int = 0                 # harmless: nobody falls
   de.actions.each { |a| a.kind = 0; a.basic = 0 }
+  # Attributes v2.4: damage = Str - Def, so the test enemy gets Def 0 / Str 0
+  # through the enemy panel values (EXP 150 as above)
+  ec = Attributes.config["enemies"] ||= {}
+  ec[de.id] = { "hp" => 1.0, "hp_max" => 1.0, "str" => 0.0, "def" => 0.0, "res" => 0.0,
+                "luck" => 0.0, "spd" => 1.0, "exp" => 150.0, "gold" => 7.0, "max_level" => 1.0 }
   cfg = Attributes.config
   cfg["actors"][2] = cfg["actors"][1].dup             # Basil edited too
   cfg["actors"][2].delete("name"); cfg["actors"][2].delete("class_id")

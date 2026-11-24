@@ -538,6 +538,21 @@ namespace XpAttributes
                 }
                 log.AppendLine("cwd of this process: " + Win32.GetProcessCurrentDirectory(Process.GetCurrentProcess().Id));
 
+                // Enemy page: edit like a user, values must be stored
+                {
+                    var ectl = new SnapshotController(p);
+                    var ef = ectl.Panel;
+                    ef.ShowEntry(PanelMode.Enemies, 1, "001", true);
+                    ef.TestSetEnemy("hp", 20, 200, 10, 35, 12, 2);
+                    var ec = p.Config;
+                    log.AppendLine("enemy1 edited: hp=" + ec.D("enemies", 1, "hp", -1) + " hp_max=" + ec.D("enemies", 1, "hp_max", -1) +
+                        " max_level=" + ec.D("enemies", 1, "max_level", -1) + " exp=" + ec.D("enemies", 1, "exp", -1) +
+                        " gold=" + ec.D("enemies", 1, "gold", -1) + " size=" + ec.D("enemies", 1, "size", -1) +
+                        " str=" + ec.D("enemies", 1, "str", -1) + " def=" + ec.D("enemies", 1, "def", -1));
+                    ef.TestSetEnemy("hp", 300, 200, 10, 35, 12, 2);
+                    log.AppendLine("enemy1 lv1 above max -> max follows: hp=" + ec.D("enemies", 1, "hp", -1) + " hp_max=" + ec.D("enemies", 1, "hp_max", -1));
+                }
+
                 // Render each page to PNG for a visual check.
                 var ctl = new SnapshotController(p);
                 foreach (var m in new[] { PanelMode.Actors, PanelMode.Enemies, PanelMode.Weapons, PanelMode.Skills, PanelMode.Settings })
@@ -546,7 +561,7 @@ namespace XpAttributes
                     f.ShowEntry(m, m == PanelMode.Skills ? 7 : 1, "001: " + (p.Find("actors", 1) != null ? p.Find("actors", 1).Name : "?"), true);
                     f.SetScriptState(ScriptInstaller.Check(p));
                     f.SetFooter("Project: " + p.Name + "  ·  saved");
-                    f.Size = new Size(f.Width, m == PanelMode.Actors ? 1640 : 640);
+                    f.Size = new Size(f.Width, m == PanelMode.Actors || m == PanelMode.Enemies ? 1700 : 640);
                     f.StartPosition = FormStartPosition.Manual;
                     f.Location = new Point(-3000, -3000);
                     f.Show();

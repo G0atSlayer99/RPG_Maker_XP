@@ -17,6 +17,9 @@ namespace XpAttributes
         // Actors: Database parameter curves (Table 6 x 100: MaxHP, MaxSP, STR, DEX, AGI, INT per level).
         public int ParamX;
         public short[] Params;
+        // Enemies: Database values ("maxhp", "maxsp", "str", "dex", "agi", "int", "pdef", "mdef", "exp", "gold").
+        public Dictionary<string, int> Fields = new Dictionary<string, int>();
+        public int Field(string key, int fallback) { int v; return Fields.TryGetValue(key, out v) ? v : fallback; }
 
         /// <summary>Database parameter (0 MaxHP, 1 MaxSP, 2 STR, 3 DEX, 4 AGI, 5 INT) at a level, or -1 if unknown.</summary>
         public int Param(int kind, int level)
@@ -298,6 +301,8 @@ namespace XpAttributes
                         e.FinalLevel = Int(o["@final_level"], 99);
                         e.Scope = Int(o["@scope"], 0);
                         e.ClassId = Int(o["@class_id"], 1);
+                        foreach (var k in new[] { "maxhp", "maxsp", "str", "dex", "agi", "int", "pdef", "mdef", "exp", "gold" })
+                            if (o["@" + k] != null) e.Fields[k] = Int(o["@" + k], 0);
                         var t = o["@parameters"] as RUserData;
                         if (t != null && t.Data != null && t.Data.Length >= 20)
                         {

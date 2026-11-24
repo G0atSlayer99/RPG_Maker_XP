@@ -21,9 +21,11 @@
 #       (Old way, still works: <enemy> events get the members of the troop
 #        given to fe_battle, each as STACK_SIZE copies.)
 #       Marker events can be completely blank (no graphic, no commands).
-#    4. Big enemies (Gold = BIG_ENEMY_GOLD) cover BIG_ENEMY_ZOOM x
-#       BIG_ENEMY_ZOOM tiles. Their <enemy> marker is the TOP-LEFT tile of
-#       that square; keep the rest of the square free and walkable.
+#       Level: <Enemy 1 Lv5> (also "Lvl5" / "Level 5") gives every enemy of
+#       that unit level 5 (stats from the Attributes panel's Enemies page).
+#    4. Big enemies: "Size" on the Attributes panel's Enemies page (2 = 2x2,
+#       3 = 3x3 tiles; the unit uses its first enemy's size). The marker is
+#       the TOP-LEFT tile of that square; keep the rest free and walkable.
 #
 #  START A BATTLE  (event command "Script", on the battle map)
 #       fe_battle(3)          # fight Troop 3, losing = Game Over
@@ -133,8 +135,7 @@ module FE_Config
   #--- Enemy map graphics -----------------------------------------------------
   ENEMY_CHARSET = {}    # { enemy_id => ["Character file", hue] }
   DEFAULT_ENEMY_CHARSET = ["001-Fighter01", 180]
-  BIG_ENEMY_GOLD = 1    # enemies whose database Gold is exactly this are big
-  BIG_ENEMY_ZOOM = 2    # whole number: sprite scale AND footprint (2 = 2x2 tiles)
+  # (big enemies: "Size" on the Attributes panel's Enemies page)
   #--- Enemy AI -----------------------------------------------------------------
   #  :charge  attack if it can, otherwise march toward the nearest target
   #  :guard   attack anything reachable this turn, otherwise stay put
@@ -170,7 +171,8 @@ module FE_Config
   #--- Event name tags --------------------------------------------------------
   START_TAG = "<start>"
   SQUAD_TAG = /<\s*squad\s*(\d+)\s*>/i   # <Squad 1>, <squad 2>, <Squad3> ...
-  ENEMY_N_TAG = /<\s*enemy\s*(\d+)\s*>/i # <Enemy 1> = Troop 1 as one unit
+  # <Enemy 1> = Troop 1 as one unit; <Enemy 1 Lv5> / <enemy 1 Lvl5> = level 5
+  ENEMY_N_TAG = /<\s*enemy\s*(\d+)(?:\s*l(?:vl|v|evel)\s*(\d+))?\s*>/i
   ENEMY_TAG = "<enemy>"
   #--- Text -------------------------------------------------------------------
   TEXT_ATTACK   = "Attack"
@@ -234,12 +236,14 @@ end
 module FE_Combat
   module_function
   def damage(a, b)
+    return a.attack_damage_to(b) if a.respond_to?(:attack_damage_to)
     power = [a.atk - b.pdef / 2, 0].max
     dmg = power * (20 + a.str) / 20
     dmg = dmg * b.elements_correct(a.element_set) / 100
     return [dmg, 0].max
   end
   def hit(a, b)
+    return [a.hit_chance_on(b), 100].min if a.respond_to?(:hit_chance_on)
     return 100 if b.cant_evade?
     eva = 8 * b.agi / [a.dex, 1].max + b.eva
     return [[a.hit * (100 - eva) / 100, 0].max, 100].min
@@ -833,7 +837,8 @@ class Game_FEUnit < Game_Character
       @character_name = cs[0]
       @character_hue  = cs[1]
     end
-    @size = big? ? [FE_Config::BIG_ENEMY_ZOOM.to_i, 1].max : 1
+    @size = 1
+    @size = [[battler.attr_size, 1].max, 3].min if !actor? and battler.respond_to?(:attr_size)
     moveto(x, y)
     @direction = player? ? 8 : 2
   end
@@ -866,9 +871,9 @@ class Game_FEUnit < Game_Character
   def dead?;   return @members.find { |m| !m.dead? } == nil; end
   def idle=(b); @step_anime = b;                           end
 
-  # Enemies with exactly BIG_ENEMY_GOLD gold in the database are big.
+  # Big = size above 1 (Attributes panel, Enemies page: "Size").
   def big?
-    return (!actor? and battler.gold == FE_Config::BIG_ENEMY_GOLD)
+    return @size > 1
   end
 
   # Tiles this unit covers when its top-left tile is (x, y).
@@ -895,6 +900,8 @@ class Game_FEUnit < Game_Character
       list = @members if list.empty?
       return FE_Squad.average(list.collect { |m| FE_Squad.actor_move(m) })
     end
+    m = battler.respond_to?(:attr_move) ? battler.attr_move : nil
+    return m.to_i if m != nil
     return FE_Config::ENEMY_MOVE[battler.id] || FE_Config::DEFAULT_MOVE
   end
   @attributes_patching = false
@@ -1054,7 +1061,7 @@ class Window_FEInfo < Window_Base
     c.font.color = FE_Draw.team_color(@unit)
     c.draw_text(0, 0, 160, 26, b.name)
     c.font.color = normal_color
-    lv = @unit.actor? ? "Lv " + b.level.to_s + "   " : ""
+    lv = b.respond_to?(:level) ? "Lv " + b.level.to_s + "   " : ""
     c.draw_text(0, 0, 256, 26, lv + @unit.hp_rate.to_s + "%", 2)
     list.each_with_index do |m, i|
       y = 26 * (i + 1)
@@ -1396,7 +1403,7 @@ class Scene_FEBattle
       n = ev.fe_name
       starts.push(ev) if n.include?(FE_Config::START_TAG)
       spawns.push(ev) if n.include?(FE_Config::ENEMY_TAG)
-      troop_marks.push([ev, $1.to_i]) if n =~ FE_Config::ENEMY_N_TAG
+      troop_marks.push([ev, $1.to_i, ($2 || 1).to_i]) if n =~ FE_Config::ENEMY_N_TAG
       if n =~ FE_Config::SQUAD_TAG
         k = $1.to_i
         squad_marks[k] = ev if squad_marks[k] == nil   # duplicates: ignored
@@ -1435,7 +1442,7 @@ class Scene_FEBattle
     end
     # <Enemy N>: Troop N as one unit
     troop_marks.each do |m|
-      list = troop_unit(m[1])
+      list = troop_unit(m[1], m[2])
       next if list.empty?
       unit = Game_FEUnit.new(list, :enemy, m[0].x, m[0].y)
       if unit.size > 1
@@ -1477,7 +1484,7 @@ class Scene_FEBattle
   end
 
   # All visible members of Troop troop_id (each once) for an <Enemy N> unit.
-  def troop_unit(troop_id)
+  def troop_unit(troop_id, level = 1)
     troop = $data_troops[troop_id]
     if troop == nil
       print("FE Tactics: <Enemy " + troop_id.to_s + ">: Troop " + troop_id.to_s + " does not exist")
@@ -1487,7 +1494,9 @@ class Scene_FEBattle
     troop.members.each_index do |k|
       m = troop.members[k]
       next if m.hidden or $data_enemies[m.enemy_id] == nil
-      list.push(Game_FEEnemy.new(troop_id, k))
+      e = Game_FEEnemy.new(troop_id, k)
+      e.level = level if e.respond_to?(:level=)
+      list.push(e)
     end
     return list
   end
