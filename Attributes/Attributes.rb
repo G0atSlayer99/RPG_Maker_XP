@@ -1,5 +1,5 @@
 #==============================================================================
-# ** Attributes  v2.4
+# ** Attributes  v2.5
 #------------------------------------------------------------------------------
 #  Extra database attributes, edited with AttributesEditor.exe (the panel that
 #  opens next to the Database window) and stored in Data/Attributes.rxdata.
@@ -32,7 +32,9 @@
 #      hit / evasion rates are not used ("can't evade" states: at least 100).
 #    Attack damage = attacker Str - target Def (0 or more, no random spread,
 #      no elements, no Guard). Magic damage = Mg - Res (Attributes.magic_damage)
-#      is ready for the skill rework; skills still use the Database formula.
+#      is ready for the skill rework; skills still use the Database formula,
+#      but without random variance (v2.5; the battle screen preview shows the
+#      exact damage: skill_damage_from / skill_hit_chance / skill_crit_chance).
 #    Critical hit: chance = attacker CrtR + attacker Luck (%), damage x CrtD
 #      (CrtD 100 = x2). The target's Luck does not lower it.
 #    Turn order: highest Spd first; tie: higher Luck; tie: actors before
@@ -406,7 +408,58 @@ class Game_Battler
     return true
   end
   #--------------------------------------------------------------------------
-  # * Apply Skill Effects (default code, skills can now crit)
+  # * Skill damage on this target before a crit (Database formula, no random
+  #   variance since v2.5). Used by skill_effect and the battle preview.
+  #--------------------------------------------------------------------------
+  def skill_damage_from(user, skill)
+    power = skill.power + user.atk * skill.atk_f / 100
+    if power > 0
+      power -= self.pdef * skill.pdef_f / 200
+      power -= self.mdef * skill.mdef_f / 200
+      power = [power, 0].max
+    end
+    rate = 20
+    rate += (user.str * skill.str_f / 100)
+    rate += (user.dex * skill.dex_f / 100)
+    rate += (user.agi * skill.agi_f / 100)
+    rate += (user.int * skill.int_f / 100)
+    d = power * rate / 20
+    d *= elements_correct(skill.element_set)
+    d /= 100
+    return d
+  end
+  #--------------------------------------------------------------------------
+  # * Skill hit rolls: first = skill hit rate, second = target evasion
+  #--------------------------------------------------------------------------
+  def skill_first_hit(user, skill)
+    hit = skill.hit
+    if skill.atk_f > 0
+      hit *= user.hit / 100
+    end
+    return hit
+  end
+  def skill_second_hit(user, skill, damage)
+    eva = 8 * self.agi / [user.dex, 1].max + self.eva
+    hit = damage < 0 ? 100 : 100 - eva * skill.eva_f / 100
+    hit = self.cant_evade? ? 100 : hit
+    return hit
+  end
+  #--------------------------------------------------------------------------
+  # * Skill hit / crit chance on this target in % (battle preview)
+  #--------------------------------------------------------------------------
+  def skill_hit_chance(user, skill)
+    h1 = [[skill_first_hit(user, skill), 0].max, 100].min
+    h2 = [[skill_second_hit(user, skill, skill_damage_from(user, skill)), 0].max, 100].min
+    return h1 * h2 / 100
+  end
+  def skill_crit_chance(user, skill)
+    crit = Attributes.skill_crit(skill.id)
+    return 0 unless crit[0]
+    return 0 if skill_damage_from(user, skill) <= 0
+    return user.crit_chance(crit[1])
+  end
+  #--------------------------------------------------------------------------
+  # * Apply Skill Effects (default code, skills can now crit, no variance)
   #--------------------------------------------------------------------------
   def skill_effect(user, skill)
     self.critical = false
@@ -416,27 +469,11 @@ class Game_Battler
     end
     effective = false
     effective |= skill.common_event_id > 0
-    hit = skill.hit
-    if skill.atk_f > 0
-      hit *= user.hit / 100
-    end
+    hit = skill_first_hit(user, skill)
     hit_result = (rand(100) < hit)
     effective |= hit < 100
     if hit_result == true
-      power = skill.power + user.atk * skill.atk_f / 100
-      if power > 0
-        power -= self.pdef * skill.pdef_f / 200
-        power -= self.mdef * skill.mdef_f / 200
-        power = [power, 0].max
-      end
-      rate = 20
-      rate += (user.str * skill.str_f / 100)
-      rate += (user.dex * skill.dex_f / 100)
-      rate += (user.agi * skill.agi_f / 100)
-      rate += (user.int * skill.int_f / 100)
-      self.damage = power * rate / 20
-      self.damage *= elements_correct(skill.element_set)
-      self.damage /= 100
+      self.damage = skill_damage_from(user, skill)
       if self.damage > 0
         crit = Attributes.skill_crit(skill.id)
         if crit[0] and user.critical_hit?(crit[1])
@@ -447,13 +484,7 @@ class Game_Battler
           self.damage /= 2
         end
       end
-      if skill.variance > 0 and self.damage.abs > 0
-        amp = [self.damage.abs * skill.variance / 100, 1].max
-        self.damage += rand(amp+1) + rand(amp+1) - amp
-      end
-      eva = 8 * self.agi / user.dex + self.eva
-      hit = self.damage < 0 ? 100 : 100 - eva * skill.eva_f / 100
-      hit = self.cant_evade? ? 100 : hit
+      hit = skill_second_hit(user, skill, self.damage)
       hit_result = (rand(100) < hit)
       effective |= hit < 100
     end

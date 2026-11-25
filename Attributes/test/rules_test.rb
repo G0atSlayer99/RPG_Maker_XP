@@ -107,14 +107,19 @@ begin
     ok = false if x.agi == y.agi and x.luck == y.luck and x.is_a?(Game_Enemy) and y.is_a?(Game_Actor)
   end
   check("turn order: Spd, then Luck, then actors first", ok)
-  sb.instance_variable_set(:@actor_command_window, Window_Command.new(160, ["Attack", "Skill", "Guard", "Item"]))
-  sb.instance_variable_set(:@party_command_window, Window_PartyCommand.new)
-  sb.instance_variable_set(:@actor_index, 0)
-  sb.instance_eval { phase3_setup_command_window }
-  cmds = sb.instance_variable_get(:@actor_command_window).instance_variable_get(:@commands)
-  check("actor commands without Guard: " + cmds.inspect, cmds.size == 3 && !cmds.include?($data_system.words.guard))
-  sb.instance_variable_get(:@actor_command_window).dispose
-  sb.instance_variable_get(:@party_command_window).dispose
+  if defined?(BattleUI)   # script "Battle UI" has its own command window
+    cmds = BattleUI::COMMANDS
+    check("actor commands without Guard (Battle UI): " + cmds.inspect, !cmds.include?($data_system.words.guard) && !cmds.include?("Guard"))
+  else
+    sb.instance_variable_set(:@actor_command_window, Window_Command.new(160, ["Attack", "Skill", "Guard", "Item"]))
+    sb.instance_variable_set(:@party_command_window, Window_PartyCommand.new)
+    sb.instance_variable_set(:@actor_index, 0)
+    sb.instance_eval { phase3_setup_command_window }
+    cmds = sb.instance_variable_get(:@actor_command_window).instance_variable_get(:@commands)
+    check("actor commands without Guard: " + cmds.inspect, cmds.size == 3 && !cmds.include?($data_system.words.guard))
+    sb.instance_variable_get(:@actor_command_window).dispose
+    sb.instance_variable_get(:@party_command_window).dispose
+  end
 
   #=== 5 equipment ignored for edited actors ==================================
   d0 = a.pdef; c0 = a.crit_rate

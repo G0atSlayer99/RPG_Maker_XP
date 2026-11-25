@@ -32,10 +32,10 @@ module Input
 end
 # record the party that the battle screen really uses
 class Scene_FESkirmish
-  alias sq_start_phase3 start_phase3
-  def start_phase3
+  alias sq_start_phase4 start_phase4
+  def start_phase4
     $battle_party = $game_party.actors.collect { |a| a.id } if $battle_party == nil
-    sq_start_phase3
+    sq_start_phase4
   end
 end
 # record where the level-up screen opens

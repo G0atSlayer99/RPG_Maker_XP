@@ -521,8 +521,13 @@ module FE_Reward
       n = @rows.size
       @y = (mode == :battle) ? 256 : 318
       @x0 = (mode == :battle) ? 10 : 320 - n * 80 + 10
+      side = (mode == :battle and defined?(BattleUI))   # "Battle UI" script
       @rows.each_with_index do |r, i|
         x = @x0 + i * 160
+        if side    # one column between the enemies and the party
+          x = BattleUI::REWARD_X
+          @y = BattleUI::REWARD_Y + i * BattleUI::REWARD_STEP
+        end
         r["x"] = x
         r["shown"] = r["exp0"]
         r["lv"] = r["lv0"]
@@ -541,7 +546,9 @@ module FE_Reward
       end
       @gold_sprite = nil
       if @gold > 0
-        @gold_sprite = new_sprite(gold_bitmap, 320, @y - 48, 3)
+        gx, gy = 320, @y - 48
+        gx, gy = BattleUI::REWARD_X + BOX_W / 2, BattleUI::REWARD_Y - 28 if side
+        @gold_sprite = new_sprite(gold_bitmap, gx, gy, 3)
         @gold_sprite.ox = @gold_sprite.bitmap.width / 2
         @gold_sprite.oy = @gold_sprite.bitmap.height / 2
         @gold_sprite.visible = false
